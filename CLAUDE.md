@@ -89,7 +89,16 @@ Real match = `sha256(token)` found in `contracts/credentials.json`.
   (`DECOY_GIT_TOKEN` / `DECOY_NPM_TOKEN` from env). The bait string itself is valid nowhere except our gateway.
 - real or unknown → forward unchanged to the real service.
 - Run mitmproxy with `--set keep_host_header=true`. Gitea `ROOT_URL` and Verdaccio `VERDACCIO_PUBLIC_URL` on BOTH real and decoy point to the gateway, so clone URLs and tarball URLs never leak internal hosts.
-- VERIFY EARLY (Saturday night): does Gitea accept `Authorization: token <decoy>` on git smart-HTTP routes? If not, rewrite to `Basic base64(<decoy_user>:<decoy_token>)`.
+- Decoy credential header (verified 24 Oct on gitea 1.22 + verdaccio 5.33):
+  - Gitea: send `Authorization: token <DECOY_GIT_TOKEN>`. Works on API, clone and push. (`Bearer` and `Basic <any user>:<token>` also work.)
+  - Verdaccio: send `Authorization: Bearer <DECOY_NPM_TOKEN>` ONLY. `token X` and `Basic user:<token>` are silently treated as anonymous.
+- npm `GET /-/whoami` returns 200 even without valid auth (body `{}`). For `login`, set `result` from the body: `{}` → denied, has `username` → ok.
+
+### env notes (verified 24 Oct)
+- Verdaccio's default config has an `npmjs` uplink and `proxy: npmjs` on every package. Remove `uplinks` and every `proxy:` line on BOTH real and decoy, or they call registry.npmjs.org (on `internal` networks they hang retrying).
+- Verdaccio token: `PUT /-/user/org.couchdb.user:<name>` with `{"name","password"}` returns it. It lives in `/verdaccio/storage`, so keep the named storage volume or recreate the token on startup.
+- Gitea token: `gitea admin user generate-access-token --username <u> --token-name <n> --scopes all` (run with `docker exec -u git`).
+- Gitea 1.22 does not enforce token scopes on git smart-HTTP (a read-only token can push). Don't rely on scopes to limit a token.
 
 ### incidents (written by core)
 `incident_id` (INC-001…), `created_ts`, `updated_ts`, `signal_kind` (bait | behavior), `confidence` (high | medium | low),
