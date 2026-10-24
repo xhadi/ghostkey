@@ -158,6 +158,13 @@
   "actions": [
     {
       "incident_id": "INC-001",
+      "kind": "notify",
+      "target": "security-team",
+      "tier": "auto",
+      "status": "done"
+    },
+    {
+      "incident_id": "INC-001",
       "kind": "disable_bait",
       "target": "BAIT-SRC-01",
       "tier": "auto",

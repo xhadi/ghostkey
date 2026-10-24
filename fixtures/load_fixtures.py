@@ -40,10 +40,16 @@ def shift_to_now(events: list[dict]) -> list[dict]:
     return events
 
 
+def signal_token_id(event: dict) -> str | None:
+    """A signal's token_id is the event's bait_id or credential_id."""
+    return event["bait_id"] or event["credential_id"]
+
+
 def write_fake_core(conn, events: list[dict]) -> None:
     """DEVELOPMENT ONLY: write fixtures/expected_state.json as if core and brain already ran."""
     state = json.loads((FIXTURES_DIR / "expected_state.json").read_text(encoding="utf-8"))
     ts_by_id = {e["event_id"]: e["ts"] for e in events}
+    event_by_id = {e["event_id"]: e for e in events}
     loaded = set(ts_by_id)
     conn.execute("UPDATE events SET processed = 1")
     for inc in state["incidents"]:
@@ -62,7 +68,8 @@ def write_fake_core(conn, events: list[dict]) -> None:
         for hit in inc["rules_hit"]:
             conn.execute(
                 "INSERT INTO signals (ts, event_id, token_id, rule, points, incident_id) VALUES (?,?,?,?,?,?)",
-                (ts_by_id[hit["event_id"]], hit["event_id"], None, hit["rule"], hit["points"], inc["incident_id"]),
+                (ts_by_id[hit["event_id"]], hit["event_id"], signal_token_id(event_by_id[hit["event_id"]]),
+                 hit["rule"], hit["points"], inc["incident_id"]),
             )
         for a in state["analyses"]:
             if a["incident_id"] == inc["incident_id"]:

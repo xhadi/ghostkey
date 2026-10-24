@@ -69,8 +69,9 @@ Full SQL: `contracts/schema.sql`. Examples: `contracts/*.example.json`. Fixtures
 `routed_to` (decoy | real | blocked), `incident_id` (NULL until core sets it), `processed` (0/1).
 
 - `session_id` = `"s_" + sha1(source_ip + "|" + (bait_id or credential_id or "anon"))[:8]`.
-- `stage`: for bait = the bait's stage from `baits.json`; for real tokens = derived from action
-  (clone/list_repos/api_read → source, install/search → build, publish/push → publish).
+- `stage`: bait events take the bait's stage from `baits.json`. Every other event (`token_kind` real, unknown, none) derives it from `action`:
+  `list_repos`, `clone`, `api_read`, `api_write` → source; `login`, `install`, `search` → build; `push`, `publish` → publish; `other` → unknown.
+- An incident's `stages` = distinct stages of its events, ordered source → build → publish, `unknown` left out.
 
 ### action classification (gateway)
 git (Gitea): `GET /api/v1/user/repos`, `/api/v1/repos/search` → `list_repos`; `info/refs?service=git-upload-pack` or `POST .../git-upload-pack` → `clone`;
@@ -95,7 +96,9 @@ Real match = `sha256(token)` found in `contracts/credentials.json`.
 `score`, `severity`, `status` (open | needs_review | closed), and JSON-text arrays `source_ips`, `token_ids`, `stages`, `rules_hit` (`[{rule, points, event_id}]`).
 
 ### signals (written by core)
-Every rule hit, including behavior hits that did not reach the incident threshold. `incident_id` may be NULL.
+Every counted rule hit, including behavior hits that did not reach the incident threshold. `incident_id` may be NULL.
+`token_id` = the event's `bait_id` or `credential_id`.
+A repeated hit of a rule that is already counted is NOT stored, so an incident's `signals` rows always match its `rules_hit`.
 
 ### analyses (written by brain)
 `incident_id`, `ts`, `source` (llm | rules), `valid` (0/1), `based_on_event_count`, `body` (JSON, see below).
@@ -116,6 +119,7 @@ When a behavior incident opens, attach the earlier events (and their `signals`) 
 ## Scoring (initial weights, tune after tests)
 
 Each rule counts at most once per incident (first hit wins).
+Before a behavior incident exists, each rule counts at most once per `credential_id` within the 30-minute window (first hit wins).
 
 | rule | points | applies to | owner |
 |---|---|---|---|
@@ -138,6 +142,21 @@ def behavior_hits(event: dict, baseline: dict | None) -> list[dict]:
 ```
 Baselines live in `contracts/baselines.json`, keyed by `credential_id`.
 
+Reference behavior (raw hits per event, before core's once-per-rule counting):
+- Rules are checked and returned in this fixed order: `new_source`, `out_of_scope`, `unexpected_publish`.
+- `baseline is None` → `[]`.
+- `out_of_scope` fires if the action is not in `allowed_actions` OR the target is not None and not in `allowed_targets`.
+
+| event | raw output |
+|---|---|
+| `evt_n0000001` | `[]` |
+| `evt_n0000002` | `[]` |
+| `evt_s2000001` | `[new_source 20]` |
+| `evt_s2000002` | `[new_source 20, out_of_scope 25]` |
+| `evt_s2000003` | `[new_source 20, out_of_scope 25, unexpected_publish 35]` |
+
+After core's once-per-rule counting: 20 + 25 + 35 = 80 (Scenario 2).
+
 ## Analyst output (brain)
 
 Must match `contracts/analysis.example.json`:
@@ -152,6 +171,7 @@ Must match `contracts/analysis.example.json`:
 ## Response tiers
 
 - auto (core inserts with `status=done`): notify, keep evidence, `disable_bait` for an exposed bait.
+- `notify`: core inserts exactly ONE (target `security-team`, tier `auto`, status `done`) when it opens any incident (bait or behavior).
 - approval (core inserts with `status=pending`, dashboard approves/rejects): `revoke_credential`, `block_publish`.
 - forbidden: any action on external systems, deleting data, changing permissions because the LLM said so.
 
@@ -161,13 +181,13 @@ Scenario 1 — leaked bait (attacker container 172.30.0.66):
 `BAIT-SRC-01` on Gitea: list repos → clone `ops/ci-pipeline` (decoy) → finds `BAIT-CI-02` in its `.npmrc` →
 on Verdaccio: whoami → publish `@kfu/build-utils@9.9.9`.
 Expected: exactly 1 incident, `signal_kind=bait`, `confidence=high`, score 95 (60+20+15), `critical`, stages `["source","build"]`,
-every event `routed_to=decoy`, zero events to real, one `disable_bait` action done per bait, analyst alternative includes `automated_secret_scanner`.
+every event `routed_to=decoy`, zero events to real, one `notify` action done, one `disable_bait` action done per bait, analyst alternative includes `automated_secret_scanner`.
 
 Scenario 2 — stolen real credential, no bait (attacker container 172.30.0.77):
 `REAL-CI-01` (npm token of `ci-bot`, baseline: source 172.30.0.10, action install, target `@kfu/build-utils`, no publish):
 install `@kfu/build-utils` from new IP → install `@kfu/payments-sdk` → publish `@kfu/build-utils@9.9.10`.
 Expected: 1 incident, `signal_kind=behavior`, `confidence=medium`, score 80 (20+25+35), `high`, `needs_review`,
-every event `routed_to=real`, one `revoke_credential` action `pending`.
+every event `routed_to=real`, one `notify` action done, one `revoke_credential` action `pending`.
 
 Normal traffic — ci-runner 172.30.0.10 with `REAL-CI-01` installing `@kfu/build-utils`: zero signals, zero incidents.
 
