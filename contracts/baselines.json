@@ -1,0 +1,8 @@
+{
+  "REAL-CI-01": {
+    "allowed_source_ips": ["172.30.0.10"],
+    "allowed_actions": ["login", "install"],
+    "allowed_targets": ["@kfu/build-utils"],
+    "may_publish": false
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "event_id": "evt_3f9a21c0",
+  "ts": "2026-10-25T10:14:03Z",
+  "session_id": "s_a3f1b2c4",
+  "source_ip": "172.30.0.66",
+  "user_agent": "npm/10.8.2 node/v20.18.0 linux x64",
+  "token_kind": "bait",
+  "bait_id": "BAIT-CI-02",
+  "credential_id": null,
+  "stage": "build",
+  "service": "npm",
+  "method": "PUT",
+  "path": "/@kfu%2fbuild-utils",
+  "action": "publish",
+  "target": "@kfu/build-utils",
+  "status_code": 201,
+  "result": "ok",
+  "routed_to": "decoy",
+  "incident_id": null,
+  "processed": 0
+}

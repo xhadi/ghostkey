@@ -1,0 +1,29 @@
+[
+  {
+    "bait_id": "BAIT-SRC-01",
+    "token": "8a1e8288799fb6fa89bebcaff546cd7d66ac90a8",
+    "kind": "gitea_token",
+    "service": "git",
+    "stage": "source",
+    "planted_at": "real Gitea: repo dev/payments-api, file .env (GITEA_TOKEN=...)",
+    "decoy_credential_env": "DECOY_GIT_TOKEN"
+  },
+  {
+    "bait_id": "BAIT-CI-02",
+    "token": "22c0d27ed5e677fbad36ac7e9598a35d55426958",
+    "kind": "npm_token",
+    "service": "npm",
+    "stage": "build",
+    "planted_at": "decoy Gitea: repo ops/ci-pipeline, file .npmrc (_authToken=...)",
+    "decoy_credential_env": "DECOY_NPM_TOKEN"
+  },
+  {
+    "bait_id": "BAIT-PUB-03",
+    "token": "33911c3480d3043089ebf015dd47294687aeb973",
+    "kind": "npm_token",
+    "service": "npm",
+    "stage": "publish",
+    "planted_at": "decoy Gitea: repo ops/release-tools, file scripts/publish.sh (P1, optional)",
+    "decoy_credential_env": "DECOY_NPM_TOKEN"
+  }
+]

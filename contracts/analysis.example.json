@@ -1,0 +1,12 @@
+{
+  "summary": "جلسة استخدمت مفتاح طُعم من مستودع الكود، استكشفت المستودعات ونسخت مستودع البناء الوهمي، ثم استخدمت طُعم البناء وحاولت تنشر حزمة.",
+  "observed": ["list_repos", "clone", "login", "publish"],
+  "hypothesis": { "label": "package_publish", "confidence": "medium" },
+  "evidence_event_ids": ["evt_s1000001", "evt_s1000002", "evt_s1000005"],
+  "alternatives": [
+    { "label": "automated_secret_scanner", "why": "أدوات فحص الأسرار الآلية تجرّب المفاتيح المسربة، مثل ما صار مع TruffleHog في حادثة Grafana. لكن محاولة النشر تضعف هالاحتمال." }
+  ],
+  "assets_at_risk": ["internal npm registry: @kfu/build-utils"],
+  "recommended_action": "تعطيل الطعوم المكشوفة، ومراجعة الأسرار الحقيقية في مستودع payments-api، والبحث عن مصدر تسريب ملف .env.",
+  "limits": "الفرضية مبنية على 5 أحداث من جلسة واحدة. ما نعرف هوية المهاجم، وما نشوف نشاطه خارج خدماتنا."
+}

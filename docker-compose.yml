@@ -1,0 +1,124 @@
+# DRAFT — not run yet. Renad owns it: bring it up Saturday night and fix what breaks.
+# Networks:
+#   devnet   : clients + gateway (the only network clients can see)
+#   realnet  : real Gitea + Verdaccio (internal, no internet)
+#   decoynet : decoy Gitea + Verdaccio (internal, no internet)
+# Python services (gateway, core, brain, dashboard) share the gkdata volume for SQLite.
+
+name: ghostkey
+
+x-py: &py
+  build: .
+  env_file: .env
+  environment:
+    GHOSTKEY_DB: /app/data/ghostkey.db
+  volumes:
+    - gkdata:/app/data
+    - ./contracts:/app/contracts:ro
+
+services:
+  gateway:
+    <<: *py
+    command: >
+      mitmdump -s gateway/addon.py
+      --mode reverse:http://gitea-real:3000@8080
+      --mode reverse:http://verdaccio-real:4873@8081
+      --set keep_host_header=true
+    networks:
+      devnet: { ipv4_address: 172.30.0.2 }
+      realnet: {}
+      decoynet: {}
+    ports: ["8080:8080", "8081:8081"]
+    depends_on: [gitea-real, gitea-decoy, verdaccio-real, verdaccio-decoy]
+
+  core:
+    <<: *py
+    command: python -m core.worker
+    networks: [devnet]
+
+  brain:
+    <<: *py
+    command: python -m brain.worker
+    networks: [devnet]   # needs internet only if the LLM is used; falls back to rules without it
+
+  dashboard:
+    <<: *py
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    networks: [devnet]
+    ports: ["8501:8501"]
+
+  gitea-real:
+    image: gitea/gitea:1.22
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://gateway:8080/
+      GITEA__actions__ENABLED: "false"
+    volumes: [gitea_real:/data]
+    networks: [realnet]
+
+  gitea-decoy:
+    image: gitea/gitea:1.22
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://gateway:8080/
+      GITEA__actions__ENABLED: "false"
+    volumes: [gitea_decoy:/data]
+    networks: [decoynet]
+
+  verdaccio-real:
+    image: verdaccio/verdaccio:5
+    environment:
+      VERDACCIO_PUBLIC_URL: http://gateway:8081/
+    volumes:
+      - ./env/verdaccio/real:/verdaccio/conf
+      - verdaccio_real:/verdaccio/storage
+    networks: [realnet]
+
+  verdaccio-decoy:
+    image: verdaccio/verdaccio:5
+    environment:
+      VERDACCIO_PUBLIC_URL: http://gateway:8081/
+    volumes:
+      - ./env/verdaccio/decoy:/verdaccio/conf
+      - verdaccio_decoy:/verdaccio/storage
+    networks: [decoynet]
+
+  # Clients. node:20-bookworm already has git, curl and python3.
+  ci-runner:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.10 }
+
+  attacker:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.66 }
+
+  attacker2:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.77 }
+
+networks:
+  devnet:
+    ipam:
+      config: [{ subnet: 172.30.0.0/24 }]
+  realnet:
+    internal: true
+  decoynet:
+    internal: true
+
+volumes:
+  gkdata:
+  gitea_real:
+  gitea_decoy:
+  verdaccio_real:
+  verdaccio_decoy:
