@@ -623,5 +623,118 @@ class TriageTests(DashboardTestCase):
         self.assertNotIn("\n\n", panel)
 
 
+class EvidencePanelTests(DashboardTestCase):
+    PAYLOAD = "<script>alert(1)</script>"
+
+    def panels(self, incident_id: str) -> tuple[str, str, str]:
+        incident = next(i for i in queries.list_incidents(self.conn) if i["incident_id"] == incident_id)
+        events = queries.list_events(self.conn, incident_id)
+        baselines = db.load_json("baselines.json")
+        credentials = db.load_json("credentials.json")
+        sessions = queries.list_sessions(self.conn)
+        return (
+            views.reached_real_html(events),
+            views.baseline_html(incident, events, baselines, credentials),
+            views.elsewhere_html(incident, sessions),
+        )
+
+    def test_scenario2_reached_real_lists_the_publish_as_written(self) -> None:
+        reached, _, _ = self.panels("INC-002")
+        self.assertIn("Written to the real npm", reached)
+        self.assertIn("@kfu/build-utils", reached)
+        self.assertIn("Read from the real npm", reached)
+        self.assertIn("@kfu/payments-sdk", reached)
+        self.assertIn("Ghostkey does not delete anything", reached)
+        self.assertLess(reached.index("Written to"), reached.index("Read from"))
+
+    def test_scenario1_reached_nothing_real(self) -> None:
+        reached, _, _ = self.panels("INC-001")
+        self.assertIn("Nothing reached the real services", reached)
+        self.assertNotIn("Written to", reached)
+        self.assertNotIn("Ghostkey does not delete anything", reached)
+
+    def test_reached_real_ignores_decoy_blocked_and_failed_requests(self) -> None:
+        base = dict(self.events[0], service="git", action="push", target="ops/x", result="ok", routed_to="real")
+        for changes in ({"routed_to": "decoy"}, {"routed_to": "blocked"}, {"result": "denied"}, {"result": "error"}):
+            self.assertIn("Nothing reached", views.reached_real_html([dict(base, **changes)]))
+        self.assertIn("Written to the real git", views.reached_real_html([base]))
+
+    def test_reached_real_groups_by_target_with_count_and_first_time(self) -> None:
+        base = dict(self.events[0], service="npm", action="install", target="@kfu/a", result="ok", routed_to="real")
+        events = [dict(base, ts="2026-10-25T10:00:09Z"), dict(base, ts="2026-10-25T10:00:03Z")]
+        panel = views.reached_real_html(events)
+        self.assertEqual(panel.count("@kfu/a"), 1)
+        self.assertIn("2 requests, first at 10:00:03 UTC", panel)
+
+    def test_baseline_marks_only_values_outside_the_baseline(self) -> None:
+        _, baseline, _ = self.panels("INC-002")
+        for value in ("172.30.0.77", "@kfu/payments-sdk", "publish"):
+            self.assertIn(f'<li class="gk-out">{value}</li>', baseline)
+        for value in ("install", "@kfu/build-utils", "172.30.0.10"):
+            self.assertNotIn(f'<li class="gk-out">{value}</li>', baseline)
+        self.assertIn('<p class="gk-out">yes</p>', baseline)
+        self.assertIn("not allowed", baseline)
+        self.assertIn("ci-bot", baseline)
+        self.assertIn("npm", baseline)
+        self.assertNotIn("sha256", baseline)
+        for credential in db.load_json("credentials.json"):
+            self.assertNotIn(credential["sha256"], baseline)
+            self.assertNotIn(credential["note"], baseline)
+
+    def test_baseline_publishing_row_is_calm_when_nothing_was_published(self) -> None:
+        incident = {"incident_id": "INC-009", "token_ids": ["REAL-CI-01"]}
+        event = dict(self.events[0], token_kind="real", credential_id="REAL-CI-01", source_ip="172.30.0.10",
+                     action="install", target="@kfu/build-utils")
+        panel = views.baseline_html(incident, [event], db.load_json("baselines.json"), db.load_json("credentials.json"))
+        self.assertNotIn("gk-out", panel)
+        self.assertIn("<p>no</p>", panel)
+
+    def test_baseline_is_empty_without_a_real_credential_with_a_baseline(self) -> None:
+        _, baseline, _ = self.panels("INC-001")
+        self.assertEqual(baseline, "")
+        incident = {"incident_id": "INC-009", "token_ids": ["REAL-OTHER"]}
+        event = dict(self.events[0], token_kind="real", credential_id="REAL-OTHER")
+        self.assertEqual(views.baseline_html(incident, [event], db.load_json("baselines.json"), []), "")
+
+    def test_elsewhere_lists_the_normal_ci_runner_session(self) -> None:
+        _, _, elsewhere = self.panels("INC-002")
+        self.assertIn("172.30.0.10", elsewhere)
+        self.assertIn("Containment applies only to the attacker's IP, so these keep working.", elsewhere)
+        self.assertIn("gk-pill-normal", elsewhere)
+        self.assertNotIn("172.30.0.77", elsewhere)
+
+    def test_elsewhere_is_empty_when_it_does_not_apply(self) -> None:
+        _, _, elsewhere = self.panels("INC-001")
+        self.assertEqual(elsewhere, "")
+
+    def test_diverted_real_events_are_not_counted_as_reached_real(self) -> None:
+        # A reviewer diverted the real token: token_kind stays real, but the request went to the decoy.
+        event = dict(self.events[0], token_kind="real", credential_id="REAL-CI-01", routed_to="decoy",
+                     action="publish", service="npm", target="@kfu/build-utils", result="ok")
+        self.assertIn("Nothing reached", views.reached_real_html([event]))
+
+    def test_hostile_values_are_escaped_and_single_line(self) -> None:
+        event = dict(self.events[0], token_kind="real", credential_id="REAL-CI-01", source_ip=self.PAYLOAD,
+                     target=self.PAYLOAD, service="npm", action="publish", result="ok", routed_to="real")
+        incident = {"incident_id": "INC-009", "token_ids": ["REAL-CI-01"]}
+        credentials = [{"credential_id": "REAL-CI-01", "service": self.PAYLOAD, "owner": self.PAYLOAD}]
+        session = {"session_id": "s_x", "source_ip": self.PAYLOAD, "token": "REAL-CI-01", "token_kind": "real",
+                   "requests": 1, "points": 0, "incident_id": self.PAYLOAD, "last_ts": "2026-10-25T10:00:00Z"}
+        panels = [
+            views.reached_real_html([event]),
+            views.baseline_html(incident, [event], db.load_json("baselines.json"), credentials),
+            views.elsewhere_html(incident, [session]),
+        ]
+        for panel in panels:
+            self.assertNotIn("<script>", panel)
+            self.assertIn("&lt;script&gt;", panel)
+            self.assertNotIn("\n\n", panel)
+
+    def test_real_panels_emit_no_blank_lines(self) -> None:
+        for incident_id in ("INC-001", "INC-002"):
+            for panel in self.panels(incident_id):
+                self.assertNotIn("\n\n", panel)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st  # noqa: E402
 
+from common import db  # noqa: E402
 from dashboard import queries, theme, views  # noqa: E402
 
 DEFAULT_REVIEWER = "analyst"
@@ -103,7 +104,8 @@ def render_response(conn, actions: list[dict]) -> None:
     st.markdown(views.auto_log_html(actions, effects), unsafe_allow_html=True)
 
 
-def render_detail(conn, incident: dict) -> None:
+def render_detail(conn, incident: dict, contracts: dict, sessions: list[dict]) -> None:
+    """One incident page. contracts = {'baselines': ..., 'credentials': ...}, loaded once per run of live()."""
     incident_id = incident["incident_id"]
     events = queries.list_events(conn, incident_id)
     analysis = queries.get_analysis(conn, incident_id)
@@ -111,7 +113,14 @@ def render_detail(conn, incident: dict) -> None:
     evidence = analysis["body"].get("evidence_event_ids", []) if analysis else []
 
     st.markdown(views.detail_header_html(incident), unsafe_allow_html=True)
+    st.markdown(views.reached_real_html(events), unsafe_allow_html=True)
     st.markdown(views.stage_map_html(events, incident["rules_hit"], evidence), unsafe_allow_html=True)
+    for panel in (
+        views.baseline_html(incident, events, contracts["baselines"], contracts["credentials"]),
+        views.elsewhere_html(incident, sessions),
+    ):
+        if panel:
+            st.markdown(panel, unsafe_allow_html=True)
     st.markdown(views.score_ledger_html(incident), unsafe_allow_html=True)
     st.markdown(views.analyst_html(analysis, len(events)), unsafe_allow_html=True)
     render_response(conn, actions)
@@ -122,6 +131,7 @@ def render_detail(conn, incident: dict) -> None:
 @st.fragment(run_every=2)
 def live() -> None:
     """The part of the page that refreshes every 2 seconds."""
+    contracts = {"baselines": db.load_json("baselines.json"), "credentials": db.load_json("credentials.json")}
     conn = queries.open_db()
     try:
         counts = queries.traffic_counts(conn)
@@ -130,7 +140,8 @@ def live() -> None:
         # Always visible, also with zero incidents: normal traffic must show as "passed silently".
         with st.container(key="triage"):
             funnel = queries.triage_funnel(conn)
-            st.markdown(views.triage_html(funnel, queries.list_sessions(conn)), unsafe_allow_html=True)
+            sessions = queries.list_sessions(conn)
+            st.markdown(views.triage_html(funnel, sessions), unsafe_allow_html=True)
         if not incidents:
             st.markdown(views.empty_state_html(), unsafe_allow_html=True)
             return
@@ -141,7 +152,7 @@ def live() -> None:
             with rail_col:
                 render_rail(incidents, selected["incident_id"], queries.pending_approval_counts(conn))
             with detail_col:
-                render_detail(conn, selected)
+                render_detail(conn, selected, contracts, sessions)
     finally:
         conn.close()
 

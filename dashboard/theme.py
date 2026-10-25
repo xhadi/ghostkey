@@ -216,13 +216,28 @@ BASE_CSS = """
 .gk-alts li{border-top:1px solid var(--rule); padding:8px 0 2px;}
 .stApp .gk-alts b{font-size:15px; font-weight:500;}
 
+/* ---- evidence panels: what reached real, baseline vs observed, same credential elsewhere ---- */
+.stApp .gk-panel>p:not([class]){font-size:15px; padding-bottom:8px;}
+.stApp .gk-reach li{display:flex; justify-content:space-between; gap:16px; padding:8px 12px; margin-bottom:6px; background:var(--canvas); border:1px solid var(--rule); border-left:4px solid var(--amber); border-radius:6px; font-size:15px;}
+.stApp .gk-reach li.gk-reach-write{border-left-color:var(--alarm); background:#FBEEF0;}
+.stApp .gk-reach li.gk-reach-write b{color:var(--alarm);}
+.stApp .gk-reach li b{font-weight:500; overflow-wrap:anywhere;}
+.stApp .gk-reach li small{font-size:13px; color:var(--plum-600); white-space:nowrap; font-variant-numeric:tabular-nums;}
+.stApp .gk-reach-none{font-size:15px; color:var(--real); border-left:4px solid var(--real); padding:2px 0 2px 12px;}
+.stApp .gk-cred-meta{font-size:13px; font-weight:400; color:var(--plum-600); margin-left:8px;}
+.stApp .gk-baseline th,.stApp .gk-baseline td{white-space:normal; vertical-align:top;}
+.stApp .gk-baseline tbody th{width:110px;}
+.stApp .gk-baseline p{font-size:13px;}
+.stApp .gk-chips li.gk-out,.stApp .gk-baseline p.gk-out{background:#F6DADF; color:var(--alarm); border-color:var(--alarm); font-weight:500;}
+.stApp .gk-baseline p.gk-out{display:inline-block; border:1px solid var(--alarm); border-radius:4px; padding:2px 8px;}
+
 /* ---- response ---- */
 .stApp .gk-ask{font-size:18px; font-weight:500; padding:14px 0 8px;}
-.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-reject_"] button{font-size:15px; padding:6px 22px; border-radius:6px; min-height:0; height:auto;}
-.stApp [class*="st-key-approve_"] button{background:var(--plum-700); border:1px solid var(--plum-700);}
-.stApp [class*="st-key-approve_"] button p{color:var(--white);}
-.stApp [class*="st-key-reject_"] button{background:transparent; border:1px solid var(--rule);}
-.stApp [class*="st-key-reject_"] button p{color:var(--plum-600);}
+.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-block_"] button,.stApp [class*="st-key-divert_"] button,.stApp [class*="st-key-reject_"] button{font-size:15px; padding:6px 22px; border-radius:6px; min-height:0; height:auto;}
+.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-block_"] button{background:var(--plum-700); border:1px solid var(--plum-700);}
+.stApp [class*="st-key-approve_"] button p,.stApp [class*="st-key-block_"] button p{color:var(--white);}
+.stApp [class*="st-key-divert_"] button,.stApp [class*="st-key-reject_"] button{background:transparent; border:1px solid var(--rule);}
+.stApp [class*="st-key-divert_"] button p,.stApp [class*="st-key-reject_"] button p{color:var(--plum-600);}
 .stApp .st-key-reviewer label p{font-size:13px; color:var(--plum-600);}
 .stApp .st-key-reviewer{width:280px !important; max-width:100%; margin-bottom:4px;}
 .stApp .st-key-reviewer [data-testid="stTextInput"],.stApp .st-key-reviewer [data-baseweb="input"]{width:100% !important; max-width:280px !important;}

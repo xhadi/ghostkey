@@ -507,3 +507,150 @@ def triage_html(funnel: dict[str, int], sessions: list[dict]) -> str:
         f"{more_line}"
         "</section>"
     )
+
+
+# ---------------------------------------------------------------- evidence panels
+
+WRITE_ACTIONS = ("publish", "push", "api_write")
+READ_ACTIONS = ("install", "clone", "api_read", "list_repos", "search", "login")
+NO_TARGET = "(no target)"
+
+
+def _reach_row_html(kind: str, verb: str, service: str, target: str, count: int, first_ts: str) -> str:
+    """One line: 'Written to the real npm: @kfu/build-utils', then the count and first time."""
+    requests = "request" if count == 1 else "requests"
+    return (
+        f'<li class="gk-reach-{kind}"><span>{esc(verb)} the real {esc(service)}: <b>{esc(target)}</b></span>'
+        f"<small>{count} {requests}, first at {esc(fmt_time(first_ts))}</small></li>"
+    )
+
+
+def reached_real_html(events: list[dict]) -> str:
+    """What the attacker really touched: only requests that reached a real service and succeeded.
+
+    Writes come first (alarm style), then reads (warning style). Each (service, target) is one line.
+    """
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for event in events:
+        if event["routed_to"] != "real" or event["result"] != "ok":
+            continue
+        if event["action"] in WRITE_ACTIONS:
+            kind = "write"
+        elif event["action"] in READ_ACTIONS:
+            kind = "read"
+        else:
+            continue
+        key = (kind, event["service"], event["target"] or NO_TARGET)
+        groups.setdefault(key, []).append(event["ts"])
+
+    rows = ""
+    for kind, verb in (("write", "Written to"), ("read", "Read from")):
+        for (group_kind, service, target), stamps in groups.items():
+            if group_kind == kind:
+                rows += _reach_row_html(kind, verb, service, target, len(stamps), min(stamps))
+    if not rows:
+        body = '<p class="gk-reach-none">Nothing reached the real services — every request went to the decoy</p>'
+    else:
+        body = f'<ul class="gk-reach">{rows}</ul>'
+        if any(key[0] == "write" for key in groups):
+            body += (
+                '<p class="gk-quiet">Check this package version or push in the real service. '
+                "A human does this; Ghostkey does not delete anything.</p>"
+            )
+    return f'<section class="gk-panel"><h2>What reached the real services</h2>{body}</section>'
+
+
+def _values_html(values: list[str], outside: set[str]) -> str:
+    """Chips for a baseline or observed list; values in `outside` get the gk-out class."""
+    chips = "".join(
+        f'<li class="gk-out">{esc(v)}</li>' if v in outside else f"<li>{esc(v)}</li>" for v in values
+    )
+    return f'<ul class="gk-chips">{chips}</ul>' if chips else '<p class="gk-none">None</p>'
+
+
+def _distinct(values: list[str]) -> list[str]:
+    """Distinct non-empty values, in first-seen order."""
+    return list(dict.fromkeys(v for v in values if v))
+
+
+def _baseline_block_html(credential_id: str, baseline: dict, credential: dict | None, events: list[dict]) -> str:
+    """Baseline vs observed rows for one credential. Never shows the credential hash or note."""
+    ips = _distinct([e["source_ip"] for e in events])
+    actions = _distinct([e["action"] for e in events])
+    targets = _distinct([e["target"] for e in events])
+    published = any(e["action"] in ("publish", "push") for e in events)
+
+    allowed_ips = baseline.get("allowed_source_ips", [])
+    allowed_actions = baseline.get("allowed_actions", [])
+    allowed_targets = baseline.get("allowed_targets", [])
+    may_publish = bool(baseline.get("may_publish"))
+    rows = [
+        ("Source IPs", _values_html(allowed_ips, set()),
+         _values_html(ips, {v for v in ips if v not in allowed_ips})),
+        ("Actions", _values_html(allowed_actions, set()),
+         _values_html(actions, {v for v in actions if v not in allowed_actions})),
+        ("Targets", _values_html(allowed_targets, set()),
+         _values_html(targets, {v for v in targets if v not in allowed_targets})),
+        ("Publishing", f'<p>{"allowed" if may_publish else "not allowed"}</p>',
+         '<p class="gk-out">yes</p>' if published and not may_publish else f'<p>{"yes" if published else "no"}</p>'),
+    ]
+    body = "".join(
+        f"<tr><th>{esc(label)}</th><td>{expected}</td><td>{seen}</td></tr>" for label, expected, seen in rows
+    )
+    owner = esc(credential["owner"]) if credential else "unknown owner"
+    service = esc(credential["service"]) if credential else "unknown service"
+    return (
+        f'<h3>{esc(credential_id)} <span class="gk-cred-meta">owner {owner}, service {service}</span></h3>'
+        '<div class="gk-table-scroll"><table class="gk-table gk-baseline">'
+        "<thead><tr><th></th><th>Baseline</th><th>Observed in this incident</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def baseline_html(incident: dict, events: list[dict], baselines: dict, credentials: list[dict]) -> str:
+    """Baseline vs observed for each real credential in the incident that has a baseline, else ''."""
+    by_id = {c["credential_id"]: c for c in credentials}
+    blocks = ""
+    for credential_id in incident["token_ids"]:
+        baseline = baselines.get(credential_id)
+        if baseline is None:
+            continue
+        seen = [e for e in events if e["token_kind"] == "real" and e["credential_id"] == credential_id]
+        if seen:
+            blocks += _baseline_block_html(credential_id, baseline, by_id.get(credential_id), seen)
+    if not blocks:
+        return ""
+    return (
+        '<section class="gk-panel"><h2>Baseline vs observed</h2>'
+        f"{blocks}"
+        '<p class="gk-quiet">Red marks a value outside what this credential normally does.</p>'
+        "</section>"
+    )
+
+
+def elsewhere_html(incident: dict, sessions: list[dict]) -> str:
+    """Other sessions using the same real credential outside this incident, else ''."""
+    others = [
+        s for s in sessions
+        if s["token_kind"] == "real"
+        and s["token"] in incident["token_ids"]
+        and s["incident_id"] != incident["incident_id"]
+    ]
+    if not others:
+        return ""
+    rows = ""
+    for session in others:
+        key, label = session_verdict(session)
+        rows += (
+            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
+            f"<td>{int(session['requests'])}</td><td>{esc(fmt_time(session['last_ts']))}</td>"
+            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
+        )
+    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Last seen", "Verdict"))
+    return (
+        '<section class="gk-panel"><h2>Same credential elsewhere</h2>'
+        "<p>Containment applies only to the attacker's IP, so these keep working.</p>"
+        '<div class="gk-table-scroll"><table class="gk-table">'
+        f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
+        "</section>"
+    )
