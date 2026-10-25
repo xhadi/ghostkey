@@ -38,6 +38,7 @@ DECOY_NPM_USER = "registry-mirror"
 # Versions created by the attack scenarios; reset_packages removes them.
 ATTACK_VERSIONS = [
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.9"),
+    (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.10"),  # a diverted scenario 2 re-run
     (NPM_REAL, "release-bot", "@kfu/build-utils", "9.9.10"),
 ]
 
