@@ -13,6 +13,9 @@ RECON_ACTIONS = ("list_repos", "api_read", "search", "install", "login")
 
 ASSET_PREFIX = {"git": "git repo", "npm": "internal npm registry"}
 
+# Where the gateway sends a real-token request after a reviewer approved Divert or Block.
+CONTAINED_ROUTES = ("decoy", "blocked")
+
 # How each action reads inside the summary sentence ("الخطوات بالترتيب: ...").
 STEP_TEXT = {
     "list_repos": "استعراض المستودعات",
@@ -90,6 +93,12 @@ def evidence_ids(incident: dict, events: list[dict], label: str) -> list[str]:
     return ids or [events[0]["event_id"]]
 
 
+def contained_count(events: list[dict]) -> int:
+    """Real-token events the gateway sent to the decoy or blocked. Bait events never count."""
+    return sum(1 for event in events
+               if event["token_kind"] == "real" and event["routed_to"] in CONTAINED_ROUTES)
+
+
 def asset_name(event: dict) -> str:
     return f"{ASSET_PREFIX[event['service']]}: {event['target']}"
 
@@ -151,7 +160,7 @@ def events_phrase(count: int) -> str:
     return f"{count} حدث"
 
 
-def summary_text(incident: dict, observed: list[str]) -> str:
+def summary_text(incident: dict, observed: list[str], contained: int = 0) -> str:
     tokens = COMMA.join(incident["token_ids"])
     ips = COMMA.join(incident["source_ips"])
     if incident["signal_kind"] == "bait":
@@ -159,7 +168,11 @@ def summary_text(incident: dict, observed: list[str]) -> str:
     else:
         opening = f"التوكن الحقيقي {tokens} استُخدم من {ips} بشكل يخالف الخط الأساسي."
     steps = COMMA.join(STEP_TEXT.get(action, action) for action in observed) or "ما فيه خطوات واضحة"
-    return f"{opening} الخطوات بالترتيب: {steps}."
+    text = f"{opening} الخطوات بالترتيب: {steps}."
+    if contained > 0:
+        text += (f" بعد قرار المراجع، عدد الطلبات اللي راحت للخدمة الوهمية أو انحجبت عند البوابة: {contained}،"
+                 " وما وصلت للخدمة الحقيقية.")
+    return text
 
 
 def recommended_action_text(incident: dict, events: list[dict]) -> str:
@@ -190,7 +203,7 @@ def rules_analysis(incident: dict, events: list[dict]) -> dict:
     observed = observed_actions(events)
     label = choose_label(observed)
     return {
-        "summary": summary_text(incident, observed),
+        "summary": summary_text(incident, observed, contained_count(events)),
         "observed": observed,
         "hypothesis": {"label": label, "confidence": HYPOTHESIS_CONFIDENCE[incident["signal_kind"]]},
         "evidence_event_ids": evidence_ids(incident, events, label),
