@@ -666,6 +666,25 @@ class EvidencePanelTests(DashboardTestCase):
         self.assertEqual(panel.count("@kfu/a"), 1)
         self.assertIn("2 requests, first at 10:00:03 UTC", panel)
 
+    def test_nothing_reached_text_depends_on_what_really_happened(self) -> None:
+        base = dict(self.events[0], service="npm", action="publish", target="@kfu/a", result="ok")
+        decoy = [dict(base, routed_to="decoy"), dict(base, routed_to="decoy")]
+        panel = views.reached_real_html(decoy)
+        self.assertIn("Nothing reached the real services — every request went to the decoy", panel)
+
+        blocked = [dict(base, routed_to="blocked", result="denied") for _ in range(2)]
+        panel = views.reached_real_html(blocked)
+        self.assertIn("Nothing reached the real services.", panel)
+        self.assertIn("2 requests were blocked at our gateway.", panel)
+        self.assertNotIn("every request went to the decoy", panel)
+
+        denied = [dict(base, routed_to="real", result="denied", status_code=401)]
+        panel = views.reached_real_html(denied)
+        self.assertIn("Nothing reached the real services.", panel)
+        self.assertNotIn("every request went to the decoy", panel)
+        self.assertNotIn("blocked at our gateway", panel)
+        self.assertNotIn("\n\n", panel)
+
     def test_baseline_marks_only_values_outside_the_baseline(self) -> None:
         _, baseline, _ = self.panels("INC-002")
         for value in ("172.30.0.77", "@kfu/payments-sdk", "publish"):

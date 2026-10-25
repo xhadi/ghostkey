@@ -525,6 +525,17 @@ def _reach_row_html(kind: str, verb: str, service: str, target: str, count: int,
     )
 
 
+def _nothing_reached_text(events: list[dict]) -> str:
+    """The calm sentence for 'no successful request reached real'. It only claims what the events show."""
+    if events and all(e["routed_to"] == "decoy" for e in events):
+        return "Nothing reached the real services — every request went to the decoy"
+    text = "Nothing reached the real services."
+    blocked = sum(e["routed_to"] == "blocked" for e in events)
+    if blocked:
+        text += f" {blocked} {'request was' if blocked == 1 else 'requests were'} blocked at our gateway."
+    return text
+
+
 def reached_real_html(events: list[dict]) -> str:
     """What the attacker really touched: only requests that reached a real service and succeeded.
 
@@ -549,7 +560,7 @@ def reached_real_html(events: list[dict]) -> str:
             if group_kind == kind:
                 rows += _reach_row_html(kind, verb, service, target, len(stamps), min(stamps))
     if not rows:
-        body = '<p class="gk-reach-none">Nothing reached the real services — every request went to the decoy</p>'
+        body = f'<p class="gk-reach-none">{esc(_nothing_reached_text(events))}</p>'
     else:
         body = f'<ul class="gk-reach">{rows}</ul>'
         if any(key[0] == "write" for key in groups):
