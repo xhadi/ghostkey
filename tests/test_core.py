@@ -190,6 +190,54 @@ class Scenario2Tests(CoreTestCase):
         ])
 
 
+class ScopedRevokeTests(CoreTestCase):
+    """Revoke prompts are per (credential, source IP); zero-hit real events never join by credential."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.load_fixtures("scenario2")
+        self.run_core()
+
+    def revokes(self, incident_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM actions WHERE incident_id = ? AND kind = 'revoke_credential' ORDER BY action_id",
+            (incident_id,),
+        ).fetchall()
+
+    def test_revoke_prompt_is_scoped_to_attacker_ip(self) -> None:
+        revokes = self.revokes("INC-001")
+        self.assertEqual(len(revokes), 1)
+        self.assertEqual(revokes[0]["scope_ip"], "172.30.0.77")
+        self.assertEqual(revokes[0]["target"], "REAL-CI-01")
+        self.assertEqual([a[0] for a in self.actions("INC-001")], ["notify", "revoke_credential"])
+
+    def test_zero_hit_real_event_does_not_join_by_credential(self) -> None:
+        normal = next(e for e in read_events(["normal"]) if e["event_id"] == "evt_n0000001")
+        normal.update(event_id="evt_n_after", ts="2026-10-25T10:12:05Z", incident_id=None, processed=0)
+        self.add_events(normal)
+        self.run_core()
+        row = self.conn.execute("SELECT incident_id FROM events WHERE event_id = 'evt_n_after'").fetchone()
+        self.assertIsNone(row["incident_id"])
+        self.assertEqual(len(self.event_ids_of("INC-001")), 3)
+        self.assertEqual(self.incidents()[0]["score"], 80)
+
+    def test_new_ip_with_hits_joins_and_asks_again(self) -> None:
+        self.add_events(real_event("evt_ip99", at(13), source_ip="172.30.0.99"))
+        self.run_core()
+        self.assertEqual(len(self.incidents()), 1)
+        self.assertEqual(self.event_ids_of("INC-001")[-1], "evt_ip99")
+        revokes = self.revokes("INC-001")
+        self.assertEqual({r["scope_ip"] for r in revokes}, {"172.30.0.77", "172.30.0.99"})
+        self.assertTrue(all(r["status"] == "pending" and r["tier"] == "approval" for r in revokes))
+        self.assertEqual(self.incidents()[0]["score"], 80)
+
+    def test_repeat_from_same_ip_adds_no_second_prompt(self) -> None:
+        self.add_events(real_event("evt_ip77", at(13), source_ip="172.30.0.77"))
+        self.run_core()
+        self.assertEqual(self.event_ids_of("INC-001")[-1], "evt_ip77")
+        self.assertEqual(len(self.revokes("INC-001")), 1)
+
+
 class NormalTrafficTests(CoreTestCase):
     def test_normal_traffic_makes_no_signals_and_no_incidents(self) -> None:
         self.load_fixtures("normal")
@@ -301,15 +349,15 @@ class BehaviorCountingTests(CoreTestCase):
         self.assertEqual(self.incidents(), [])
         self.assertEqual(len(self.signals()), 1)
 
-    def test_later_real_event_of_same_credential_joins_without_new_signals(self) -> None:
+    def test_later_zero_hit_event_of_same_credential_stays_out_of_the_incident(self) -> None:
         self.load_fixtures("scenario2")
         self.run_core()
         self.add_events(real_event("evt_late", at(30), source_ip="172.30.0.10"))
         self.run_core()
         self.assertEqual(len(self.incidents()), 1)
-        self.assertEqual(self.event_ids_of("INC-001")[-1], "evt_late")
+        self.assertEqual(self.event_ids_of("INC-001")[-1], "evt_s2000003")
         self.assertEqual(len(self.signals()), 3)
-        self.assertEqual(self.incidents()[0]["source_ips"], ["172.30.0.77", "172.30.0.10"])
+        self.assertEqual(self.incidents()[0]["source_ips"], ["172.30.0.77"])
 
 
 class CorrelationTests(CoreTestCase):
