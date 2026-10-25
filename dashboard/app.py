@@ -1,7 +1,7 @@
 """Ghostkey dashboard (Streamlit entry point).
 
 Run from the repo root:  streamlit run dashboard/app.py
-Read-only, except the Approve / Reject buttons (see queries.decide_action).
+Read-only, except the Block / Divert / Reject / Approve buttons (see queries.decide_action).
 """
 from __future__ import annotations
 
@@ -66,22 +66,41 @@ def render_rail(incidents: list[dict], selected_id: str, pending: dict[str, int]
         )
 
 
-def render_response(actions: list[dict]) -> None:
+def render_decision_buttons(action: dict) -> None:
+    """The buttons for one pending action, inside one keyed container (theme.py lays them in a row)."""
+    action_id = action["action_id"]
+    with st.container(key=f"decide_{action_id}"):
+        if action["kind"] == "revoke_credential":
+            unscoped = not action.get("scope_ip")
+            st.button("Block", key=f"block_{action_id}", type="primary", disabled=unscoped,
+                      on_click=decide, args=(action_id, "block"))
+            st.button("Divert to decoy", key=f"divert_{action_id}", disabled=unscoped,
+                      on_click=decide, args=(action_id, "divert"))
+        else:
+            st.button("Approve", key=f"approve_{action_id}", type="primary",
+                      on_click=decide, args=(action_id, "approve"))
+        st.button("Reject", key=f"reject_{action_id}",
+                  on_click=decide, args=(action_id, "reject"))
+
+
+def render_response(conn, actions: list[dict]) -> None:
     st.markdown('<section class="gk-section"><h2>Response</h2></section>', unsafe_allow_html=True)
     pending = [a for a in actions if a["tier"] == "approval" and a["status"] == "pending"]
     if pending:
         st.text_input("Reviewer", value=DEFAULT_REVIEWER, key="reviewer")
     for action in pending:
         st.markdown(views.pending_action_html(action), unsafe_allow_html=True)
-        # One keyed container; theme.py lays its two buttons out side by side.
-        with st.container(key=f"decide_{action['action_id']}"):
-            st.button("Approve", key=f"approve_{action['action_id']}", type="primary",
-                      on_click=decide, args=(action["action_id"], "approve"))
-            st.button("Reject", key=f"reject_{action['action_id']}",
-                      on_click=decide, args=(action["action_id"], "reject"))
-    if pending:
-        st.markdown(views.approval_note_html(), unsafe_allow_html=True)
-    st.markdown(views.auto_log_html(actions), unsafe_allow_html=True)
+        render_decision_buttons(action)
+        if action["kind"] == "revoke_credential":
+            st.markdown(views.approval_note_html(scoped=bool(action.get("scope_ip"))), unsafe_allow_html=True)
+        else:
+            st.markdown(views.approve_note_html(), unsafe_allow_html=True)
+    effects = {
+        a["action_id"]: queries.containment_effect(conn, a)
+        for a in actions
+        if a["kind"] == "revoke_credential" and a["status"] == "approved"
+    }
+    st.markdown(views.auto_log_html(actions, effects), unsafe_allow_html=True)
 
 
 def render_detail(conn, incident: dict) -> None:
@@ -95,7 +114,7 @@ def render_detail(conn, incident: dict) -> None:
     st.markdown(views.stage_map_html(events, incident["rules_hit"], evidence), unsafe_allow_html=True)
     st.markdown(views.score_ledger_html(incident), unsafe_allow_html=True)
     st.markdown(views.analyst_html(analysis, len(events)), unsafe_allow_html=True)
-    render_response(actions)
+    render_response(conn, actions)
     with st.expander("Event log", expanded=False):
         st.markdown(views.event_log_html(events), unsafe_allow_html=True)
 

@@ -1,7 +1,8 @@
 """Read-side helpers for the dashboard (no streamlit import, so tests can run anywhere).
 
 The dashboard is read-only, with ONE exception: decide_action() updates
-actions.status / decided_by / decided_ts for approval-tier actions that are still pending.
+actions.status / decided_by / decided_ts (and mode, for Block / Divert) on approval-tier
+actions that are still pending.
 """
 from __future__ import annotations
 
@@ -150,19 +151,53 @@ def list_sessions(conn: sqlite3.Connection) -> list[dict]:
     return sorted(ordered, key=group)
 
 
-def decide_action(conn: sqlite3.Connection, action_id: int, decision: str, decided_by: str) -> bool:
-    """Approve or reject a pending approval-tier action. Returns True if a row changed.
+# decision -> (new status, new mode, extra WHERE condition). The condition is the guard that keeps
+# each decision on the kind of action it fits; all of them also need tier = 'approval' AND status = 'pending'.
+DECISION_RULES = {
+    "block": ("approved", "block", "kind = 'revoke_credential' AND scope_ip IS NOT NULL"),
+    "divert": ("approved", "divert", "kind = 'revoke_credential' AND scope_ip IS NOT NULL"),
+    "approve": ("approved", None, "kind != 'revoke_credential'"),
+    "reject": ("rejected", None, "1 = 1"),
+}
 
-    The WHERE clause is the guard: a decided action, or an auto action, matches no row.
+
+def decide_action(conn: sqlite3.Connection, action_id: int, decision: str, decided_by: str) -> bool:
+    """Decide a pending approval-tier action. Returns True if a row changed.
+
+    decision is block | divert | reject | approve. Block and divert set mode (the gateway enforces
+    only approved rows that have a mode) and fit only a revoke_credential with a scope_ip.
+    approve fits every other kind. The WHERE clause is the guard: a decided action, an auto action
+    or a decision that does not fit the action matches no row.
     """
-    new_status = {"approve": "approved", "reject": "rejected"}.get(decision)
-    if new_status is None:
-        raise ValueError(f"decision must be 'approve' or 'reject', got {decision!r}")
+    rule = DECISION_RULES.get(decision)
+    if rule is None:
+        raise ValueError(f"decision must be one of {sorted(DECISION_RULES)}, got {decision!r}")
+    new_status, new_mode, fits = rule
     reviewer = decided_by.strip() or "analyst"
     cursor = conn.execute(
-        "UPDATE actions SET status = ?, decided_by = ?, decided_ts = ? "
-        "WHERE action_id = ? AND tier = 'approval' AND status = 'pending'",
-        (new_status, reviewer, db.now_iso(), action_id),
+        "UPDATE actions SET status = ?, mode = ?, decided_by = ?, decided_ts = ? "
+        f"WHERE action_id = ? AND tier = 'approval' AND status = 'pending' AND {fits}",
+        (new_status, new_mode, reviewer, db.now_iso(), action_id),
     )
     conn.commit()
     return cursor.rowcount == 1
+
+
+# mode -> the routed_to value the gateway writes for a request it contained.
+MODE_ROUTE = {"block": "blocked", "divert": "decoy"}
+
+
+def containment_effect(conn: sqlite3.Connection, action: dict) -> int:
+    """How many requests the gateway really contained for an approved Block / Divert.
+
+    Counts events of that credential from that IP, routed as the mode says, at or after the decision.
+    Returns 0 for anything that is not an approved revoke_credential with a mode and an IP.
+    """
+    route = MODE_ROUTE.get(action.get("mode") or "")
+    if (action["kind"] != "revoke_credential" or action["status"] != "approved"
+            or route is None or not action.get("scope_ip") or not action.get("decided_ts")):
+        return 0
+    return conn.execute(
+        "SELECT COUNT(*) FROM events WHERE credential_id = ? AND source_ip = ? AND routed_to = ? AND ts >= ?",
+        (action["target"], action["scope_ip"], route, action["decided_ts"]),
+    ).fetchone()[0]

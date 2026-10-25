@@ -97,24 +97,58 @@ class DecideActionTests(DashboardTestCase):
     def action_row(self, action_id: int) -> dict:
         return dict(self.conn.execute("SELECT * FROM actions WHERE action_id = ?", (action_id,)).fetchone())
 
-    def test_approve_pending_action(self) -> None:
+    def test_block_pending_revoke_sets_approved_and_mode(self) -> None:
         action_id = self.action_id("INC-002", "revoke_credential")
-        self.assertTrue(queries.decide_action(self.conn, action_id, "approve", "hadi"))
+        self.assertTrue(queries.decide_action(self.conn, action_id, "block", "hadi"))
         row = self.action_row(action_id)
         self.assertEqual(row["status"], "approved")
+        self.assertEqual(row["mode"], "block")
         self.assertEqual(row["decided_by"], "hadi")
         self.assertTrue(row["decided_ts"].endswith("Z"))
+
+    def test_divert_pending_revoke_sets_approved_and_mode(self) -> None:
+        action_id = self.action_id("INC-002", "revoke_credential")
+        self.assertTrue(queries.decide_action(self.conn, action_id, "divert", "hadi"))
+        row = self.action_row(action_id)
+        self.assertEqual((row["status"], row["mode"]), ("approved", "divert"))
 
     def test_reject_pending_action(self) -> None:
         action_id = self.action_id("INC-002", "revoke_credential")
         self.assertTrue(queries.decide_action(self.conn, action_id, "reject", "ghalia"))
-        self.assertEqual(self.action_row(action_id)["status"], "rejected")
+        row = self.action_row(action_id)
+        self.assertEqual(row["status"], "rejected")
+        self.assertIsNone(row["mode"])
+
+    def test_divert_on_revoke_without_scope_ip_changes_nothing(self) -> None:
+        action_id = self.action_id("INC-002", "revoke_credential")
+        self.conn.execute("UPDATE actions SET scope_ip = NULL WHERE action_id = ?", (action_id,))
+        self.conn.commit()
+        before = self.action_row(action_id)
+        self.assertFalse(queries.decide_action(self.conn, action_id, "divert", "hadi"))
+        self.assertFalse(queries.decide_action(self.conn, action_id, "block", "hadi"))
+        self.assertEqual(self.action_row(action_id), before)
+
+    def test_approve_on_revoke_changes_nothing(self) -> None:
+        action_id = self.action_id("INC-002", "revoke_credential")
+        before = self.action_row(action_id)
+        self.assertFalse(queries.decide_action(self.conn, action_id, "approve", "hadi"))
+        self.assertEqual(self.action_row(action_id), before)
+
+    def test_block_on_non_revoke_action_changes_nothing(self) -> None:
+        action_id = self.action_id("INC-002", "notify")
+        self.conn.execute("UPDATE actions SET tier = 'approval', status = 'pending' WHERE action_id = ?", (action_id,))
+        self.conn.commit()
+        before = self.action_row(action_id)
+        self.assertFalse(queries.decide_action(self.conn, action_id, "block", "hadi"))
+        self.assertEqual(self.action_row(action_id), before)
+        self.assertTrue(queries.decide_action(self.conn, action_id, "approve", "hadi"))
 
     def test_decided_action_cannot_be_decided_again(self) -> None:
         action_id = self.action_id("INC-002", "revoke_credential")
-        queries.decide_action(self.conn, action_id, "approve", "hadi")
+        queries.decide_action(self.conn, action_id, "block", "hadi")
         before = self.action_row(action_id)
         self.assertFalse(queries.decide_action(self.conn, action_id, "reject", "someone-else"))
+        self.assertFalse(queries.decide_action(self.conn, action_id, "divert", "someone-else"))
         self.assertEqual(self.action_row(action_id), before)
 
     def test_auto_action_cannot_be_decided(self) -> None:
@@ -128,17 +162,116 @@ class DecideActionTests(DashboardTestCase):
 
     def test_blank_reviewer_falls_back_to_analyst(self) -> None:
         action_id = self.action_id("INC-002", "revoke_credential")
-        queries.decide_action(self.conn, action_id, "approve", "   ")
+        queries.decide_action(self.conn, action_id, "block", "   ")
         self.assertEqual(self.action_row(action_id)["decided_by"], "analyst")
 
     def test_bad_decision_word_is_an_error(self) -> None:
         with self.assertRaises(ValueError):
-            queries.decide_action(self.conn, 1, "maybe", "hadi")
+            queries.decide_action(self.conn, 1, "nuke", "hadi")
 
 
 def marker_classes(map_html: str) -> dict[str, str]:
     """event_id -> the class attribute of its marker."""
     return {m.group(2): m.group(1) for m in re.finditer(r'<article class="([^"]+)" data-event="([^"]+)"', map_html)}
+
+
+class ContainmentEffectTests(DashboardTestCase):
+    def revoke(self) -> dict:
+        return [a for a in queries.list_actions(self.conn, "INC-002") if a["kind"] == "revoke_credential"][0]
+
+    def add_event(self, event_id: str, ts: str, source_ip: str, routed_to: str, credential_id: str = "REAL-CI-01") -> None:
+        event = dict(self.events[0], event_id=event_id, ts=ts, source_ip=source_ip, routed_to=routed_to,
+                     credential_id=credential_id, incident_id=None, processed=1)
+        db.insert_event(self.conn, event)
+        self.conn.commit()
+
+    def decide(self, mode: str) -> dict:
+        action_id = self.revoke()["action_id"]
+        self.conn.execute(
+            "UPDATE actions SET status='approved', mode=?, decided_by='hadi', decided_ts=? WHERE action_id=?",
+            (mode, "2026-10-25T12:00:00Z", action_id),
+        )
+        self.conn.commit()
+        return self.revoke()
+
+    def test_block_counts_only_matching_credential_ip_route_and_time(self) -> None:
+        action = self.decide("block")
+        self.add_event("evt_c0000001", "2026-10-25T11:59:59Z", "172.30.0.77", "blocked")  # before the decision
+        self.add_event("evt_c0000002", "2026-10-25T12:00:05Z", "172.30.0.77", "blocked")  # counts
+        self.add_event("evt_c0000003", "2026-10-25T12:00:06Z", "172.30.0.77", "blocked")  # counts
+        self.add_event("evt_c0000004", "2026-10-25T12:00:07Z", "172.30.0.88", "blocked")  # other IP
+        self.add_event("evt_c0000005", "2026-10-25T12:00:08Z", "172.30.0.77", "blocked", "REAL-OTHER")  # other credential
+        self.add_event("evt_c0000006", "2026-10-25T12:00:09Z", "172.30.0.77", "decoy")  # wrong route for block
+        self.assertEqual(queries.containment_effect(self.conn, action), 2)
+
+    def test_divert_counts_decoy_routed_events(self) -> None:
+        action = self.decide("divert")
+        self.add_event("evt_c0000007", "2026-10-25T12:00:05Z", "172.30.0.77", "decoy")
+        self.add_event("evt_c0000008", "2026-10-25T12:00:06Z", "172.30.0.77", "blocked")
+        self.assertEqual(queries.containment_effect(self.conn, action), 1)
+
+    def test_zero_when_not_an_approved_revoke(self) -> None:
+        self.assertEqual(queries.containment_effect(self.conn, self.revoke()), 0)
+        notify = [a for a in queries.list_actions(self.conn, "INC-002") if a["kind"] == "notify"][0]
+        self.assertEqual(queries.containment_effect(self.conn, notify), 0)
+        rejected = dict(self.decide("block"), status="rejected")
+        self.assertEqual(queries.containment_effect(self.conn, rejected), 0)
+
+
+class DecidedLineTests(DashboardTestCase):
+    def action(self, **changes) -> dict:
+        base = {"kind": "revoke_credential", "target": "REAL-CI-01", "scope_ip": "172.30.0.77", "tier": "approval",
+                "status": "approved", "mode": "block", "decided_by": "hadi", "decided_ts": "2026-10-25T15:44:10Z",
+                "ts": "2026-10-25T15:40:00Z"}
+        base.update(changes)
+        return base
+
+    def test_blocked_line(self) -> None:
+        line = views.decided_action_html(self.action(), 3)
+        self.assertIn("Blocked at our gateway: REAL-CI-01 from 172.30.0.77 · 3 requests stopped since 15:44:10 UTC", line)
+
+    def test_diverted_line(self) -> None:
+        line = views.decided_action_html(self.action(mode="divert"), 2)
+        self.assertIn("Diverted to decoy: REAL-CI-01 from 172.30.0.77 · 2 requests diverted since 15:44:10 UTC", line)
+
+    def test_rejected_line(self) -> None:
+        line = views.decided_action_html(self.action(status="rejected", mode=None))
+        self.assertIn("Rejected by hadi at 15:44:10 UTC, nothing changed", line)
+
+    def test_approved_revoke_without_mode_does_not_claim_enforcement(self) -> None:
+        line = views.decided_action_html(self.action(mode=None))
+        self.assertNotIn("Blocked", line)
+        self.assertNotIn("Diverted", line)
+        self.assertIn("not enforced", line)
+
+    def test_pending_sentence_and_notes(self) -> None:
+        pending = self.action(status="pending", mode=None, decided_by=None, decided_ts=None)
+        self.assertIn("Stop REAL-CI-01 from 172.30.0.77 at our gateway", views.pending_action_html(pending))
+        self.assertIn("Applies only to this credential from this IP. Rotating the credential is still up to "
+                      "its owner. Ghostkey never changes external systems.", views.approval_note_html())
+        self.assertIn("No IP scope on this action; cannot be enforced", views.approval_note_html(scoped=False))
+
+    def test_non_revoke_action_keeps_approved_line(self) -> None:
+        action = self.action(kind="block_publish", target="@kfu/x", scope_ip=None, mode=None)
+        self.assertIn("Approved by hadi at 15:44:10 UTC", views.decided_action_html(action))
+
+    def test_auto_log_uses_effects_and_never_says_revoked(self) -> None:
+        actions = queries.list_actions(self.conn, "INC-002")
+        revoke = [a for a in actions if a["kind"] == "revoke_credential"][0]
+        decided = dict(revoke, status="approved", mode="block", decided_by="hadi", decided_ts="2026-10-25T15:44:10Z")
+        others = [a for a in actions if a is not revoke]
+        log = views.auto_log_html(others + [decided], {decided["action_id"]: 4})
+        self.assertIn("4 requests stopped", log)
+        self.assertNotIn("Revoked credential", log)
+        self.assertNotIn("Revoked credential", views.auto_log_html(actions))
+        self.assertNotIn("Revoked credential", views.auto_log_html([dict(decided, status="rejected", mode=None)]))
+
+    def test_decided_line_escapes_target_and_ip(self) -> None:
+        evil = "<script>alert(1)</script>"
+        line = views.decided_action_html(self.action(target=evil, scope_ip=evil, decided_by=evil), 1)
+        self.assertNotIn("<script>", line)
+        self.assertIn("&lt;script&gt;", line)
+        self.assertNotIn("\n", line)
 
 
 class StageMapTests(DashboardTestCase):
@@ -255,6 +388,7 @@ class EscapingTests(unittest.TestCase):
         analysis = {"source": "llm", "valid": 1, "based_on_event_count": 1, "body": body}
         self.assert_escaped(views.analyst_html(analysis, 1))
         action = {"kind": "revoke_credential", "target": self.PAYLOAD, "tier": "approval", "status": "approved",
+                  "scope_ip": self.PAYLOAD, "mode": "block",
                   "decided_by": self.PAYLOAD, "decided_ts": "2026-10-25T10:00:00Z", "ts": "2026-10-25T10:00:00Z"}
         self.assert_escaped(views.pending_action_html(action))
         self.assert_escaped(views.auto_log_html([action]))
@@ -287,11 +421,11 @@ class AnalystPanelTests(DashboardTestCase):
 class ResponseAndHeaderTests(DashboardTestCase):
     def test_pending_sentence_and_decided_line(self) -> None:
         action = queries.list_actions(self.conn, "INC-002")[1]
-        self.assertIn("Revoke credential REAL-CI-01", views.pending_action_html(action))
-        queries.decide_action(self.conn, action["action_id"], "approve", "hadi")
+        self.assertIn("Stop REAL-CI-01 from 172.30.0.77 at our gateway", views.pending_action_html(action))
+        queries.decide_action(self.conn, action["action_id"], "block", "hadi")
         decided = [a for a in queries.list_actions(self.conn, "INC-002") if a["kind"] == "revoke_credential"][0]
         log = views.auto_log_html(queries.list_actions(self.conn, "INC-002"))
-        self.assertIn("Approved by hadi at", log)
+        self.assertIn("Blocked at our gateway: REAL-CI-01 from 172.30.0.77 · 0 requests stopped since", log)
         self.assertIn("UTC", log)
         self.assertIn("Notified security-team", log)
         self.assertNotIn("pending", views.auto_log_html([dict(decided, status="pending")]))

@@ -332,11 +332,10 @@ def analyst_html(analysis: dict | None, event_count: int) -> str:
 ACTION_DONE_TEXT = {
     "notify": "Notified {target}",
     "disable_bait": "Disabled bait {target}",
-    "revoke_credential": "Revoked credential {target}",
     "block_publish": "Blocked publish for {target}",
 }
 ACTION_ASK_TEXT = {
-    "revoke_credential": "Revoke credential {target}",
+    "revoke_credential": "Stop {target} at our gateway",
     "block_publish": "Block publish for {target}",
 }
 
@@ -349,17 +348,49 @@ def action_sentence(action: dict, pending: bool = False) -> str:
 
 
 def pending_action_html(action: dict) -> str:
-    """The sentence above the Approve / Reject buttons (the buttons are streamlit widgets)."""
-    return f'<p class="gk-ask">{esc(action_sentence(action, pending=True))}</p>'
+    """The sentence above the decision buttons (the buttons are streamlit widgets)."""
+    if action["kind"] == "revoke_credential" and action.get("scope_ip"):
+        sentence = f'Stop {action["target"]} from {action["scope_ip"]} at our gateway'
+    else:
+        sentence = action_sentence(action, pending=True)
+    return f'<p class="gk-ask">{esc(sentence)}</p>'
 
 
-def approval_note_html() -> str:
+def approval_note_html(scoped: bool = True) -> str:
+    """Note under the Block / Divert / Reject buttons of a revoke_credential action."""
+    if not scoped:
+        return '<p class="gk-quiet">No IP scope on this action; cannot be enforced</p>'
+    return (
+        '<p class="gk-quiet">Applies only to this credential from this IP. Rotating the credential is '
+        "still up to its owner. Ghostkey never changes external systems.</p>"
+    )
+
+
+def approve_note_html() -> str:
+    """Note under the Approve / Reject buttons of any other approval action."""
     return '<p class="gk-quiet">Approving records the decision. Ghostkey never changes external systems.</p>'
 
 
-def decided_action_html(action: dict) -> str:
-    verb = "Approved" if action["status"] == "approved" else "Rejected"
+def _revoke_decided_text(action: dict, effect: int) -> str | None:
+    """The honest decided line for a revoke_credential, or None if it is not decided that way."""
+    who = f'{action["target"]} from {action["scope_ip"]}'
+    clock = _clock(action["decided_ts"] or "")
+    if action["status"] == "rejected":
+        return f'Rejected by {action["decided_by"]} at {clock} UTC, nothing changed'
+    if action["mode"] == "block":
+        return f"Blocked at our gateway: {who} · {effect} requests stopped since {clock} UTC"
+    if action["mode"] == "divert":
+        return f"Diverted to decoy: {who} · {effect} requests diverted since {clock} UTC"
+    # Approved without a mode (an old row): the gateway ignores it, so do not claim any effect.
+    return f'Approved by {action["decided_by"]} at {clock} UTC, not enforced (no mode set)'
+
+
+def decided_action_html(action: dict, effect: int = 0) -> str:
+    """One decided approval. effect = requests the gateway really contained (see queries.containment_effect)."""
     when = fmt_time(action["decided_ts"]) if action["decided_ts"] else ""
+    if action["kind"] == "revoke_credential":
+        return f'<li class="gk-decided"><span>{esc(_revoke_decided_text(action, effect))}</span></li>'
+    verb = "Approved" if action["status"] == "approved" else "Rejected"
     return (
         '<li class="gk-decided">'
         f"<span>{esc(action_sentence(action, pending=True))}</span>"
@@ -367,15 +398,19 @@ def decided_action_html(action: dict) -> str:
     )
 
 
-def auto_log_html(actions: list[dict]) -> str:
-    """Quiet log of automatic actions plus any decided approvals."""
+def auto_log_html(actions: list[dict], effects: dict[int, int] | None = None) -> str:
+    """Quiet log of automatic actions plus any decided approvals.
+
+    effects maps action_id -> contained request count for approved revokes (missing means 0).
+    """
+    effects = effects or {}
     lines = [
         f'<li><span>{esc(action_sentence(a))}</span><small>{esc(fmt_time(a["ts"]))}</small></li>'
         for a in actions
         if a["tier"] == "auto" and a["status"] == "done"
     ]
     lines += [
-        decided_action_html(a)
+        decided_action_html(a, effects.get(a.get("action_id"), 0))
         for a in actions
         if a["tier"] == "approval" and a["status"] in ("approved", "rejected")
     ]
