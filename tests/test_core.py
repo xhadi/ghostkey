@@ -244,6 +244,15 @@ class BehaviorCountingTests(CoreTestCase):
         self.assertEqual(len(self.signals()), 1)
         self.assertEqual(self.incidents(), [])
 
+    def test_events_in_the_same_second_are_processed_in_arrival_order(self) -> None:
+        # event_id is random hex, so "evt_z" arriving first must still win over "evt_a".
+        self.add_events(
+            real_event("evt_z", at(0), source_ip="172.30.0.77"),
+            real_event("evt_a", at(0), source_ip="172.30.0.77"),
+        )
+        self.run_core()
+        self.assertEqual([s["event_id"] for s in self.signals()], ["evt_z"])
+
     def test_opens_at_exactly_60_points(self) -> None:
         # From the allowed IP: out_of_scope 25 first, then publish gives unexpected_publish 35.
         self.add_events(
