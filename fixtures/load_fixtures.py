@@ -79,8 +79,10 @@ def write_fake_core(conn, events: list[dict]) -> None:
         for act in state["actions"]:
             if act["incident_id"] == inc["incident_id"]:
                 conn.execute(
-                    "INSERT INTO actions (incident_id, ts, kind, target, tier, status) VALUES (?,?,?,?,?,?)",
-                    (act["incident_id"], times[-1], act["kind"], act["target"], act["tier"], act["status"]),
+                    "INSERT INTO actions (incident_id, ts, kind, target, tier, status, scope_ip)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (act["incident_id"], times[-1], act["kind"], act["target"], act["tier"], act["status"],
+                     act.get("scope_ip")),
                 )
 
 

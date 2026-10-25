@@ -68,5 +68,7 @@ CREATE TABLE IF NOT EXISTS actions (
   tier         TEXT NOT NULL CHECK (tier IN ('auto','approval')),
   status       TEXT NOT NULL CHECK (status IN ('done','pending','approved','rejected')),
   decided_by   TEXT,
-  decided_ts   TEXT
+  decided_ts   TEXT,
+  scope_ip     TEXT,
+  mode         TEXT CHECK (mode IN ('block','divert'))
 );

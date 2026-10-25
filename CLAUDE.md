@@ -26,11 +26,11 @@ Our value is: correlation into one incident, stage ordering, evidence-linked ana
 
 | Folder | Owner | Writes to DB |
 |---|---|---|
-| `gateway/` | Hadi | inserts `events` |
+| `gateway/` | Hadi | inserts `events`; reads `actions` (to apply approved containment) |
 | `core/` (correlation + scoring + actions) | Hadi | updates `events.incident_id/processed`, writes `incidents`, `signals`, inserts `actions` |
 | `brain/` (behavior rules + LLM analyst) | Ghalia | writes `analyses` only; `brain/rules.py` is a pure function called by `core/` |
 | `env/`, `attacker/`, `tests/sessions/` | Renad | nothing (creates services, seed data, baits, attack scripts) |
-| `dashboard/` | Abbas | updates `actions.status/decided_by/decided_ts` only; everything else read-only |
+| `dashboard/` | Abbas | updates `actions.status/decided_by/decided_ts/mode` only; everything else read-only |
 | `contracts/`, `common/` | Hadi (shared) | — |
 
 ## Architecture
@@ -114,15 +114,19 @@ A repeated hit of a rule that is already counted is NOT stored, so an incident's
 
 ### actions (inserted by core, decided by dashboard)
 `incident_id`, `kind` (disable_bait | revoke_credential | block_publish | notify), `target`, `tier` (auto | approval),
-`status` (done | pending | approved | rejected), `decided_by`, `decided_ts`.
+`status` (done | pending | approved | rejected), `decided_by`, `decided_ts`,
+`scope_ip` (core sets it on `revoke_credential`: the source IP the decision applies to; NULL for other kinds),
+`mode` (block | divert; the dashboard sets it when the reviewer approves a `revoke_credential`; NULL while pending, when rejected and for other kinds).
+`common/db.py init()` adds `scope_ip` and `mode` to an older DB with `ALTER TABLE`. `python -m common.reset_db` empties all tables.
 
 ## Correlation (core)
 
 An event joins an existing open incident if ANY of:
-1. same `bait_id` or `credential_id` as the incident, or
+1. same `bait_id` or `credential_id` as the incident (a real-token event with zero raw behavior hits does NOT join through the same credential), or
 2. same `source_ip` as the incident and within 30 minutes of the incident's last event.
 Otherwise a bait event opens a new incident; a real-token event only opens one when behavior points reach the threshold.
-Events from real tokens with zero rule hits keep `incident_id = NULL`.
+Events from real tokens with zero rule hits keep `incident_id = NULL`, unless they join an open incident through rule 2 (same IP within 30 minutes).
+Reason: normal CI traffic with the same credential must not be pulled into a behavior incident.
 When a behavior incident opens, attach the earlier events (and their `signals`) that counted toward the threshold.
 
 ## Scoring (initial weights, tune after tests)
@@ -182,6 +186,7 @@ Must match `contracts/analysis.example.json`:
 - auto (core inserts with `status=done`): notify, keep evidence, `disable_bait` for an exposed bait.
 - `notify`: core inserts exactly ONE (target `security-team`, tier `auto`, status `done`) when it opens any incident (bait or behavior).
 - approval (core inserts with `status=pending`, dashboard approves/rejects): `revoke_credential`, `block_publish`.
+- `revoke_credential` (pending): core inserts one per (incident, credential, source IP) for real-token events that have behavior hits. The reviewer chooses Block or Divert to decoy, or rejects. Block/Divert are enforced only at OUR gateway, only for that credential from that IP. Nothing is changed on Gitea or Verdaccio, and nothing is contained automatically.
 - forbidden: any action on external systems, deleting data, changing permissions because the LLM said so.
 
 ## Demo scenarios (expected results — these are the acceptance tests)

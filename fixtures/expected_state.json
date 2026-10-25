@@ -189,7 +189,8 @@
       "kind": "revoke_credential",
       "target": "REAL-CI-01",
       "tier": "approval",
-      "status": "pending"
+      "status": "pending",
+      "scope_ip": "172.30.0.77"
     }
   ]
 }
