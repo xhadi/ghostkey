@@ -1,0 +1,9 @@
+Fonts bundled so the dashboard works offline (no runtime request to fonts.googleapis.com).
+The woff2 files were downloaded from Google Fonts. Both families are licensed under the
+SIL Open Font License, Version 1.1. Full text: https://openfontlicense.org/open-font-license-official-text/
+
+IBM Plex Sans Arabic (weights 400, 500, 600; arabic and latin subsets). Used for all UI text.
+Copyright 2018 IBM Corp. (https://github.com/IBM/plex)
+
+Space Grotesk (weight 700; latin subset). Used only for the GHOSTKEY wordmark.
+Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)
