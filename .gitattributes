@@ -1,0 +1,3 @@
+# Files read by bash/npm/git inside Linux containers must keep LF, even on Windows checkouts.
+*.sh text eol=lf
+attacker/loot/* text eol=lf
