@@ -416,3 +416,59 @@ def event_log_html(events: list[dict]) -> str:
         '<div class="gk-table-scroll"><table class="gk-table">'
         f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
     )
+
+
+# ---------------------------------------------------------------- traffic triage
+
+MAX_TRIAGE_SESSIONS = 6
+
+
+def session_verdict(session: dict) -> tuple[str, str]:
+    """(css key, label) for one session row from queries.list_sessions()."""
+    if session["incident_id"]:
+        return "incident", f"Incident {session['incident_id']}"
+    if session["points"] > 0:
+        return "flagged", "Flagged, below threshold"
+    if session["token_kind"] == "real":
+        return "normal", "Normal, matches baseline"
+    return "unscored", "No signals"
+
+
+def _funnel_step_html(count: int, label: str, note: str = "") -> str:
+    """One slim step: 'count label' on one line, with an optional muted note after it."""
+    small = f'<small class="gk-step-note">{esc(note)}</small>' if note else ""
+    return f'<li><b class="gk-step-count">{int(count)}</b><span class="gk-step-label">{esc(label)}</span>{small}</li>'
+
+
+def triage_html(funnel: dict[str, int], sessions: list[dict]) -> str:
+    """Funnel from all requests down to the few that reach the analyst, plus a table of sessions."""
+    if funnel["requests"] == 0:
+        return '<section class="gk-section gk-triage"><h2>Traffic triage</h2><p class="gk-quiet">No traffic yet</p></section>'
+    steps = "".join([
+        _funnel_step_html(funnel["requests"], "requests checked"),
+        _funnel_step_html(funnel["passed"], "passed silently"),
+        _funnel_step_html(funnel["flagged"], "flagged, watched"),
+        _funnel_step_html(funnel["incidents"], "incidents", f"{funnel['in_incidents']} requests"),
+        _funnel_step_html(funnel["analyzed"], "analyzed", f"{funnel['analyzed_llm']} by LLM"),
+    ])
+    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Points", "Verdict"))
+    rows = ""
+    for session in sessions[:MAX_TRIAGE_SESSIONS]:
+        key, label = session_verdict(session)
+        rows += (
+            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
+            f"<td>{int(session['requests'])}</td><td>{int(session['points'])}</td>"
+            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
+        )
+    more = len(sessions) - MAX_TRIAGE_SESSIONS
+    more_line = f'<p class="gk-quiet">+{more} more sessions</p>' if more > 0 else ""
+    return (
+        '<section class="gk-section gk-triage">'
+        "<h2>Traffic triage</h2>"
+        f'<ol class="gk-funnel">{steps}</ol>'
+        '<p class="gk-triage-note">Every request gets a cheap baseline check. Only incidents go to the analyst.</p>'
+        '<div class="gk-table-scroll"><table class="gk-table">'
+        f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
+        f"{more_line}"
+        "</section>"
+    )

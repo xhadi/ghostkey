@@ -83,6 +83,73 @@ def traffic_counts(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+def triage_funnel(conn: sqlite3.Connection) -> dict[str, int]:
+    """Counts for the triage funnel, per SESSION, so it always agrees with the sessions table.
+
+    A request counts with its session: in_incidents if any event of the session is in an incident,
+    else flagged if the session has signals, else passed. passed + flagged + in_incidents == requests.
+    (Core leaves a repeated rule hit without incident_id and signal, so judging single events would
+    call an attacker's follow-up request "passed silently".)
+    """
+    def one(sql: str) -> int:
+        return conn.execute(sql).fetchone()[0]
+
+    funnel = {"requests": 0, "passed": 0, "flagged": 0, "in_incidents": 0}
+    for session in list_sessions(conn):
+        funnel["requests"] += session["requests"]
+        if session["incident_id"]:
+            funnel["in_incidents"] += session["requests"]
+        elif session["points"] > 0:
+            funnel["flagged"] += session["requests"]
+        else:
+            funnel["passed"] += session["requests"]
+    funnel["incidents"] = one("SELECT COUNT(*) FROM incidents")
+    funnel["analyzed"] = one("SELECT COUNT(*) FROM incidents WHERE incident_id IN (SELECT incident_id FROM analyses)")
+    funnel["analyzed_llm"] = one("SELECT COUNT(*) FROM analyses WHERE source = 'llm' AND valid = 1")
+    return funnel
+
+
+def list_sessions(conn: sqlite3.Connection) -> list[dict]:
+    """One row per session_id over all events.
+
+    Order: sessions in an incident first, then flagged ones (points > 0), then the rest;
+    newest last_ts first inside each group.
+    """
+    rows = conn.execute(
+        "SELECT e.session_id, e.source_ip, e.bait_id, e.credential_id, e.token_kind, e.ts, e.incident_id, "
+        "COALESCE((SELECT SUM(s.points) FROM signals s WHERE s.event_id = e.event_id), 0) AS points "
+        "FROM events e ORDER BY e.ts ASC, e.rowid ASC"
+    ).fetchall()
+    sessions: dict[str, dict] = {}
+    for row in rows:
+        session = sessions.get(row["session_id"])
+        if session is None:
+            # Rows come oldest first, so the first row of a session is its first event.
+            session = sessions[row["session_id"]] = {
+                "session_id": row["session_id"],
+                "source_ip": row["source_ip"],
+                "token": row["bait_id"] or row["credential_id"] or "anonymous",
+                "token_kind": row["token_kind"],
+                "requests": 0,
+                "points": 0,
+                "incident_id": None,
+                "last_ts": row["ts"],
+            }
+        session["requests"] += 1
+        session["points"] += row["points"]
+        session["incident_id"] = session["incident_id"] or row["incident_id"]
+        session["last_ts"] = max(session["last_ts"], row["ts"])
+
+    def group(session: dict) -> int:
+        if session["incident_id"]:
+            return 0
+        return 1 if session["points"] > 0 else 2
+
+    # Two stable sorts: newest first, then by group.
+    ordered = sorted(sessions.values(), key=lambda s: s["last_ts"], reverse=True)
+    return sorted(ordered, key=group)
+
+
 def decide_action(conn: sqlite3.Connection, action_id: int, decision: str, decided_by: str) -> bool:
     """Approve or reject a pending approval-tier action. Returns True if a row changed.
 

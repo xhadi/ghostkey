@@ -337,5 +337,157 @@ class ResponseAndHeaderTests(DashboardTestCase):
             self.assertNotIn("\n\n", piece)
 
 
+class TriageTests(DashboardTestCase):
+    def session_for(self, **match: str) -> dict:
+        sessions = queries.list_sessions(self.conn)
+        return next(s for s in sessions if all(s[k] == v for k, v in match.items()))
+
+    def add_flagged_event(self, ip: str = "172.30.0.99", **overrides: str) -> dict:
+        """A real-token event with one signal and no incident (deviation below the threshold)."""
+        event = dict(self.events[0], event_id="evt_f0000001", source_ip=ip, session_id="s_flagged1",
+                     incident_id=None, processed=1, **overrides)
+        db.insert_event(self.conn, event)
+        self.conn.execute(
+            "INSERT INTO signals (ts, event_id, token_id, rule, points, incident_id) VALUES (?,?,?,?,?,NULL)",
+            (event["ts"], event["event_id"], "REAL-CI-01", "new_source", 20),
+        )
+        self.conn.commit()
+        return event
+
+    def test_funnel_numbers_come_from_the_fixtures(self) -> None:
+        funnel = queries.triage_funnel(self.conn)
+        in_incidents = self.conn.execute("SELECT COUNT(*) FROM events WHERE incident_id IS NOT NULL").fetchone()[0]
+        analyses = self.conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+        llm = self.conn.execute("SELECT COUNT(*) FROM analyses WHERE source='llm' AND valid=1").fetchone()[0]
+        self.assertEqual(funnel["requests"], len(self.events))
+        self.assertEqual(funnel["in_incidents"], in_incidents)
+        self.assertEqual(funnel["passed"] + funnel["flagged"] + funnel["in_incidents"], funnel["requests"])
+        self.assertEqual(funnel["incidents"], 2)
+        self.assertEqual(funnel["analyzed"], analyses)
+        self.assertEqual(funnel["analyzed_llm"], llm)
+        # The two normal events pass silently; nothing is flagged-only.
+        self.assertEqual(funnel["passed"], 2)
+        self.assertEqual(funnel["flagged"], 0)
+
+    def test_normal_session_is_quiet_and_sorts_last(self) -> None:
+        sessions = queries.list_sessions(self.conn)
+        normal = self.session_for(source_ip="172.30.0.10", token="REAL-CI-01")
+        self.assertEqual(normal["points"], 0)
+        self.assertIsNone(normal["incident_id"])
+        self.assertEqual(normal["requests"], 2)
+        self.assertEqual(views.session_verdict(normal)[0], "normal")
+        self.assertEqual(sessions[-1]["session_id"], normal["session_id"])
+
+    def test_incident_sessions_come_first(self) -> None:
+        sessions = queries.list_sessions(self.conn)
+        # Fixture files carry no incident_id; use the DB, which fake core filled in.
+        rows = self.conn.execute("SELECT DISTINCT session_id FROM events WHERE incident_id IS NOT NULL").fetchall()
+        incident_sessions = {r["session_id"] for r in rows}
+        self.assertTrue(incident_sessions)
+        leading = sessions[: len(incident_sessions)]
+        self.assertEqual({s["session_id"] for s in leading}, incident_sessions)
+        for session in leading:
+            self.assertEqual(views.session_verdict(session)[0], "incident")
+        scenario2 = self.session_for(source_ip="172.30.0.77")
+        self.assertEqual(scenario2["incident_id"], "INC-002")
+        self.assertEqual(scenario2["points"], 80)
+        self.assertEqual(views.session_verdict(scenario2), ("incident", "Incident INC-002"))
+
+    def test_flagged_event_counts_and_gets_a_flagged_verdict(self) -> None:
+        before = queries.triage_funnel(self.conn)
+        self.add_flagged_event()
+        after = queries.triage_funnel(self.conn)
+        self.assertEqual(after["flagged"], before["flagged"] + 1)
+        self.assertEqual(after["passed"], before["passed"])
+        self.assertEqual(after["passed"] + after["flagged"] + after["in_incidents"], after["requests"])
+        session = self.session_for(source_ip="172.30.0.99")
+        self.assertEqual(session["points"], 20)
+        self.assertEqual(views.session_verdict(session), ("flagged", "Flagged, below threshold"))
+        sessions = queries.list_sessions(self.conn)
+        flagged_at = [s["session_id"] for s in sessions].index(session["session_id"])
+        normal_at = [s["session_id"] for s in sessions].index(self.session_for(source_ip="172.30.0.10")["session_id"])
+        self.assertLess(flagged_at, normal_at)
+
+    def test_repeated_hit_in_an_incident_session_is_not_passed_silently(self) -> None:
+        """Core leaves a repeated rule hit without incident_id and signal; the session still owns it."""
+        before = queries.triage_funnel(self.conn)
+        first = dict(self.events[0], event_id="evt_r0000001", source_ip="172.30.0.88", session_id="s_attack88",
+                     incident_id="INC-002", processed=1)
+        follow_up = dict(first, event_id="evt_r0000002", incident_id=None)
+        db.insert_event(self.conn, first)
+        db.insert_event(self.conn, follow_up)
+        self.conn.commit()
+        after = queries.triage_funnel(self.conn)
+        self.assertEqual(after["in_incidents"], before["in_incidents"] + 2)
+        self.assertEqual(after["passed"], before["passed"])
+        self.assertEqual(after["flagged"], before["flagged"])
+        self.assertEqual(after["passed"] + after["flagged"] + after["in_incidents"], after["requests"])
+        session = self.session_for(session_id="s_attack88")
+        self.assertEqual(session["requests"], 2)
+        self.assertEqual(views.session_verdict(session)[0], "incident")
+
+    def test_funnel_matches_the_sessions_table(self) -> None:
+        self.add_flagged_event()
+        funnel = queries.triage_funnel(self.conn)
+        sessions = queries.list_sessions(self.conn)
+        incident_requests = sum(s["requests"] for s in sessions if s["incident_id"])
+        flagged_requests = sum(s["requests"] for s in sessions if not s["incident_id"] and s["points"] > 0)
+        self.assertEqual(funnel["in_incidents"], incident_requests)
+        self.assertEqual(funnel["flagged"], flagged_requests)
+
+    def test_unscored_verdict_for_non_real_sessions(self) -> None:
+        session = {"incident_id": None, "points": 0, "token_kind": "unknown"}
+        self.assertEqual(views.session_verdict(session), ("unscored", "No signals"))
+
+    def test_triage_html_shows_funnel_sentence_and_sessions(self) -> None:
+        funnel = queries.triage_funnel(self.conn)
+        panel = views.triage_html(funnel, queries.list_sessions(self.conn))
+        self.assertIn("Traffic triage", panel)
+        for label in ("requests checked", "passed silently", "flagged, watched", "incidents", "analyzed"):
+            self.assertIn(label, panel)
+        self.assertIn(f"{funnel['in_incidents']} requests", panel)
+        self.assertIn(f"{funnel['analyzed_llm']} by LLM", panel)
+        self.assertIn("Every request gets a cheap baseline check. Only incidents go to the analyst.", panel)
+        self.assertIn("gk-pill-incident", panel)
+        self.assertIn("gk-pill-normal", panel)
+        self.assertNotIn("more sessions", panel)
+        self.assertNotIn("\n\n", panel)
+
+    def test_triage_html_caps_the_table_and_counts_the_rest(self) -> None:
+        sessions = [
+            {"session_id": f"s_{n}", "source_ip": f"10.0.0.{n}", "token": "anonymous", "token_kind": "none",
+             "requests": 1, "points": 0, "incident_id": None, "last_ts": "2026-10-25T10:00:00Z"}
+            for n in range(9)
+        ]
+        funnel = queries.triage_funnel(self.conn)
+        panel = views.triage_html(funnel, sessions)
+        self.assertEqual(panel.count("<tr><td>"), views.MAX_TRIAGE_SESSIONS)
+        self.assertIn("+3 more sessions", panel)
+
+    def test_triage_html_escapes_hostile_values(self) -> None:
+        payload = "<script>alert(1)</script>"
+        session = {"session_id": "s_x", "source_ip": payload, "token": payload, "token_kind": "real",
+                   "requests": 1, "points": 0, "incident_id": payload, "last_ts": "2026-10-25T10:00:00Z"}
+        panel = views.triage_html(queries.triage_funnel(self.conn), [session])
+        self.assertNotIn("<script>", panel)
+        self.assertIn("&lt;script&gt;", panel)
+        self.assertNotIn("\n\n", panel)
+
+    def test_empty_db_shows_the_no_traffic_line(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            conn = db.connect(Path(tmp) / "empty.db")
+            try:
+                db.init(conn)
+                funnel = queries.triage_funnel(conn)
+                self.assertEqual(funnel, {k: 0 for k in funnel})
+                self.assertEqual(queries.list_sessions(conn), [])
+                panel = views.triage_html(funnel, [])
+            finally:
+                conn.close()
+        self.assertIn("No traffic yet", panel)
+        self.assertNotIn("requests checked", panel)
+        self.assertNotIn("\n\n", panel)
+
+
 if __name__ == "__main__":
     unittest.main()

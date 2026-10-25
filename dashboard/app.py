@@ -108,6 +108,10 @@ def live() -> None:
         counts = queries.traffic_counts(conn)
         incidents = queries.list_incidents(conn)
         st.markdown(views.header_html(counts, theme.mark_data_uri()), unsafe_allow_html=True)
+        # Always visible, also with zero incidents: normal traffic must show as "passed silently".
+        with st.container(key="triage"):
+            funnel = queries.triage_funnel(conn)
+            st.markdown(views.triage_html(funnel, queries.list_sessions(conn)), unsafe_allow_html=True)
         if not incidents:
             st.markdown(views.empty_state_html(), unsafe_allow_html=True)
             return
