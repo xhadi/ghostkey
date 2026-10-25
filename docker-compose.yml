@@ -85,6 +85,16 @@ services:
       - verdaccio_decoy:/verdaccio/storage
     networks: [decoynet]
 
+  # One-off helper for env/setup.sh (seeds Gitea and Verdaccio over HTTP).
+  # Not started by `up`; run with: docker compose run --rm setup python3 -m env.seed all
+  # It sits on realnet + decoynet only (both internal), so it has no internet.
+  setup:
+    image: node:20-bookworm
+    profiles: [setup]
+    working_dir: /repo
+    volumes: [.:/repo]
+    networks: [realnet, decoynet]
+
   # Clients. node:20-bookworm already has git, curl and python3.
   ci-runner:
     image: node:20-bookworm
@@ -110,7 +120,8 @@ services:
 networks:
   devnet:
     ipam:
-      config: [{ subnet: 172.30.0.0/24 }]
+      # Static IPs (gateway .2, clients .10/.66/.77) live below .128; containers without a fixed IP get .128+.
+      config: [{ subnet: 172.30.0.0/24, ip_range: 172.30.0.128/25 }]
   realnet:
     internal: true
   decoynet:

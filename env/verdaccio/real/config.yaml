@@ -1,0 +1,36 @@
+# Verdaccio (real registry) for Ghostkey. Based on the official verdaccio 5 docker config.
+# Differences from the default:
+#   - NO uplinks and NO proxy settings on packages (the default would call registry.npmjs.org).
+#   - The "audit" middleware is removed (it forwards to an uplink).
+#   - htpasswd lives in the storage volume, so Verdaccio never writes into this bind-mounted folder.
+
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+
+# Web UI is not needed for the demo.
+web:
+  enable: false
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    # Registration must stay open: env/setup.sh creates the users with
+    # PUT /-/user/org.couchdb.user:<name>. The network is internal, so this is safe.
+    max_users: 100
+
+packages:
+  # Private scope: you must be logged in to read, publish or unpublish.
+  '@kfu/*':
+    access: $authenticated
+    publish: $authenticated
+    unpublish: $authenticated
+  # Everything else: same rules. There is no uplink, so unknown packages are simply 404.
+  '**':
+    access: $authenticated
+    publish: $authenticated
+    unpublish: $authenticated
+
+server:
+  keepAliveTimeout: 60
+
+log: { type: stdout, format: pretty, level: http }
