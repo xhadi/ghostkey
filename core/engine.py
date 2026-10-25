@@ -257,7 +257,8 @@ def process_pending(conn: sqlite3.Connection, behavior_hits_fn: BehaviorHitsFn,
     A database error rolls back and is raised (the worker retries next second).
     Any other error is a bug for this one event: roll back, mark it processed, keep going.
     """
-    rows = conn.execute("SELECT * FROM events WHERE processed = 0 ORDER BY ts, event_id").fetchall()
+    # rowid = arrival order; event_id is random hex, so it can't break ties within one second.
+    rows = conn.execute("SELECT * FROM events WHERE processed = 0 ORDER BY ts, rowid").fetchall()
     for row in rows:
         try:
             process_event(conn, dict(row), behavior_hits_fn, baselines)
