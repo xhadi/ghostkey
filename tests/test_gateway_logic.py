@@ -361,6 +361,33 @@ class RouteForTest(unittest.TestCase):
             self.assertEqual(logic.route_for(kind, "npm", {}), {"routed_to": "real"})
 
 
+class ContainmentRouteTest(unittest.TestCase):
+    def test_containment_none(self):
+        self.assertIsNone(logic.containment_route(None, "npm", ENV))
+
+    def test_containment_block_is_403(self):
+        self.assertEqual(
+            logic.containment_route("block", "git", ENV),
+            {"routed_to": "blocked", "status": 403, "body": b"forbidden"},
+        )
+
+    def test_containment_divert_npm_uses_bearer_decoy(self):
+        self.assertEqual(
+            logic.containment_route("divert", "npm", ENV),
+            {
+                "routed_to": "decoy",
+                "upstream": "http://verdaccio-decoy:4873",
+                "authorization": "Bearer decoy-npm-synthetic",
+            },
+        )
+
+    def test_containment_divert_without_decoy_env_is_503_blocked(self):
+        self.assertEqual(
+            logic.containment_route("divert", "npm", {}),
+            {"routed_to": "blocked", "status": 503, "body": b"blocked"},
+        )
+
+
 class NewEventIdTest(unittest.TestCase):
     def test_format(self):
         self.assertRegex(logic.new_event_id(), r"^evt_[0-9a-f]{8}$")

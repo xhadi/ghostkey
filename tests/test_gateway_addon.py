@@ -354,6 +354,112 @@ class GatewayAddonTest(unittest.TestCase):
         self.gateway.error(flow)
         self.assertEqual(self.rows(), [])
 
+    # --- containment of a real credential ------------------------------------
+
+    def add_revoke(self, status: str, mode: str | None, scope_ip: str | None, decided_ts: str = "2026-10-25T10:00:00Z") -> None:
+        """Insert an incident and a revoke_credential action for REAL-CI-01."""
+        conn = db.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO incidents (incident_id, created_ts, updated_ts, signal_kind, confidence,"
+                " score, severity, status) VALUES ('INC-001', ?, ?, 'behavior', 'medium', 80, 'high', 'needs_review')",
+                (decided_ts, decided_ts),
+            )
+            conn.execute(
+                "INSERT INTO actions (incident_id, ts, kind, target, tier, status, decided_by, decided_ts, scope_ip, mode)"
+                " VALUES ('INC-001', ?, 'revoke_credential', 'REAL-CI-01', 'approval', ?, 'tester', ?, ?, ?)",
+                (decided_ts, status, decided_ts, scope_ip, mode),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def npm_get(self, peer: str):
+        return self.make_flow(
+            path="/@kfu%2fbuild-utils", auth=f"Bearer {REAL_TOKEN}", port=NPM_PORT, peer=peer,
+        )
+
+    def test_block_answers_403_and_records_blocked_event(self):
+        self.add_revoke("approved", "block", "172.30.0.77")
+        flow = self.npm_get("172.30.0.77")
+        self.gateway.request(flow)
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(flow.response.content, b"forbidden")
+        self.assertEqual(flow.request.host, "verdaccio-real")  # never re-pointed
+        row = self.only_row()
+        self.assertEqual(row["routed_to"], "blocked")
+        self.assertEqual(row["status_code"], 403)
+        self.assertEqual(row["result"], "denied")
+        self.assertEqual(row["token_kind"], "real")
+        self.assertEqual(row["credential_id"], "REAL-CI-01")
+
+    def test_divert_goes_to_decoy_with_decoy_credential(self):
+        self.add_revoke("approved", "divert", "172.30.0.77")
+        flow = self.npm_get("172.30.0.77")
+        self.gateway.request(flow)
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "verdaccio-decoy")
+        self.assertEqual(flow.request.headers.get_all("Authorization"), [f"Bearer {DECOY_NPM}"])
+        self.answer(flow, 200, b"{}")
+        row = self.only_row()
+        self.assertEqual(row["routed_to"], "decoy")
+        self.assertEqual(row["token_kind"], "real")
+        self.assertEqual(row["credential_id"], "REAL-CI-01")
+
+    def test_divert_without_decoy_settings_answers_503(self):
+        self.restart_gateway({})
+        self.add_revoke("approved", "divert", "172.30.0.77")
+        flow = self.npm_get("172.30.0.77")
+        self.gateway.request(flow)
+        self.assertEqual(flow.response.status_code, 503)
+        self.assertEqual(flow.request.host, "verdaccio-real")
+        row = self.only_row()
+        self.assertEqual((row["routed_to"], row["status_code"], row["result"]), ("blocked", 503, "error"))
+
+    def test_same_credential_other_ip_is_untouched(self):
+        self.add_revoke("approved", "block", "172.30.0.77")
+        flow = self.npm_get("172.30.0.10")
+        self.gateway.request(flow)
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "verdaccio-real")
+        self.assertEqual(flow.request.headers.get_all("Authorization"), [f"Bearer {REAL_TOKEN}"])
+        self.answer(flow)
+        self.assertEqual(self.only_row()["routed_to"], "real")
+
+    def test_pending_or_rejected_decision_has_no_effect(self):
+        self.add_revoke("pending", None, "172.30.0.77")
+        self.add_revoke("rejected", "block", "172.30.0.77")
+        flow = self.npm_get("172.30.0.77")
+        self.gateway.request(flow)
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "verdaccio-real")
+        self.answer(flow)
+        self.assertEqual(self.only_row()["routed_to"], "real")
+
+    def test_newest_approved_decision_wins(self):
+        self.add_revoke("approved", "block", "172.30.0.77", "2026-10-25T10:00:00Z")
+        self.add_revoke("approved", "divert", "172.30.0.77", "2026-10-25T10:05:00Z")
+        flow = self.npm_get("172.30.0.77")
+        self.gateway.request(flow)
+        self.assertEqual(flow.request.host, "verdaccio-decoy")
+
+    def test_containment_does_not_apply_to_baits_or_other_credentials(self):
+        self.add_revoke("approved", "block", "172.30.0.77")
+        flow = self.make_flow(auth=f"token {BAIT_GIT}", path="/api/v1/user/repos", peer="172.30.0.77")
+        self.gateway.request(flow)
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "gitea-decoy")
+
+    def test_failed_containment_lookup_fails_closed(self):
+        self.gateway.conn.close()  # the lookup will now raise
+        flow = self.npm_get("172.30.0.77")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.gateway.request(flow)
+        self.assertEqual(flow.response.status_code, 503)
+        self.assertEqual(flow.request.host, "verdaccio-real")
+        self.assertNotIn(REAL_TOKEN, out.getvalue())
+
     # --- never store a token -------------------------------------------------
 
     def test_no_event_column_contains_any_token(self):
@@ -372,8 +478,15 @@ class GatewayAddonTest(unittest.TestCase):
         self.gateway.request(errored)
         errored.error = tflow.terr()
         self.gateway.error(errored)
+        self.add_revoke("approved", "block", "172.30.0.77")  # contained real-token paths
+        blocked = self.npm_get("172.30.0.77")
+        self.gateway.request(blocked)
+        self.add_revoke("approved", "divert", "172.30.0.78")
+        diverted = self.npm_get("172.30.0.78")
+        self.gateway.request(diverted)
+        self.answer(diverted)
         rows = self.rows()
-        self.assertEqual(len(rows), len(flows) + 1)
+        self.assertEqual(len(rows), len(flows) + 3)
         everything = " ".join(str(value) for row in rows for value in row.values())
         for secret in ALL_SECRETS + ("not-a-known-token-xyz",):
             self.assertNotIn(secret, everything)

@@ -6,6 +6,7 @@ Port 8080 is Gitea (git), port 8081 is Verdaccio (npm).
 For every request we:
   1. look for a bait or real token in the Authorization header,
   2. send bait traffic to the decoy service with the decoy credential (never to the real one),
+     and apply an approved Block/Divert decision to one real credential from one source IP,
   3. write exactly one row to the `events` table once the answer (or an error) is known.
 The token itself is never stored or printed.
 """
@@ -98,11 +99,15 @@ class Gateway:
             candidates += logic.token_candidates(header_value)
         token = logic.classify_token(candidates, self.baits, self.credentials)
         action, target = logic.classify_action(service, request.method, request.path)
+        source_ip = logic.normalize_ip(flow.client_conn.peername[0])
         route = logic.route_for(token["token_kind"], service, self.env)
+        if token["token_kind"] == "real":
+            mode = self.containment_mode(token["credential_id"], source_ip)
+            route = logic.containment_route(mode, service, self.env) or route
         flow.metadata[META_KEY] = {
             "ts": db.now_iso(),
             "service": service,
-            "source_ip": logic.normalize_ip(flow.client_conn.peername[0]),
+            "source_ip": source_ip,
             "user_agent": request.headers.get("user-agent"),
             "method": request.method,
             "path": request.path,
@@ -113,10 +118,20 @@ class Gateway:
             "saved": False,
         }
         if route["routed_to"] == "blocked":
-            flow.response = http.Response.make(503, b"blocked", {"Content-Type": "text/plain"})
-            self._record(flow, 503, None)  # the response hook may not run for our own answer
+            status, body = route.get("status", 503), route.get("body", b"blocked")
+            flow.response = http.Response.make(status, body, {"Content-Type": "text/plain"})
+            self._record(flow, status, None)  # the response hook may not run for our own answer
         elif route["routed_to"] == "decoy":
             point_at_decoy(flow, route["upstream"], route["authorization"])
+
+    def containment_mode(self, credential_id: str, source_ip: str) -> str | None:
+        """Newest approved revoke decision for this credential from this IP: 'block', 'divert' or None."""
+        row = self.conn.execute(
+            "SELECT mode FROM actions WHERE kind='revoke_credential' AND status='approved'"
+            " AND target=? AND scope_ip=? ORDER BY decided_ts DESC, action_id DESC LIMIT 1",
+            (credential_id, source_ip),
+        ).fetchone()
+        return row["mode"] if row else None
 
     def _record(self, flow: http.HTTPFlow, status_code: int | None, response: http.Response | None) -> None:
         """Write the event for this flow, once."""
