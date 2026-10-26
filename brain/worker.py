@@ -168,6 +168,7 @@ def run_loop(conn: sqlite3.Connection, llm_fn: LlmFn | None,
         try:
             analyze_pending(conn, llm_fn)
         except sqlite3.Error as error:  # for example "database is locked": try again next pass
+            conn.rollback()  # end the failed transaction, or it keeps the write lock and blocks everyone
             print(f"brain: database error, will retry: {error}", flush=True)
         sleep(POLL_SECONDS)
 

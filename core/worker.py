@@ -66,6 +66,7 @@ def main(sleep: Callable[[float], None] = time.sleep) -> None:
         try:
             run_once(conn, behavior_hits_fn, baselines)
         except sqlite3.Error as error:  # for example "database is locked": try again next second
+            conn.rollback()  # end the failed transaction, or it keeps the write lock / stays stuck
             print(f"core: database error, will retry: {error}", flush=True)
         sleep(POLL_SECONDS)
 

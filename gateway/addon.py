@@ -59,6 +59,7 @@ class Gateway:
         try:
             self._route_request(flow)
         except Exception as exc:  # never kill the proxy; never forward a request we could not check
+            self._rollback()
             flow.metadata.pop(META_KEY, None)
             flow.response = http.Response.make(503, b"gateway error", {"Content-Type": "text/plain"})
             print(f"ghostkey gateway: request hook failed ({type(exc).__name__}), answered 503")
@@ -67,15 +68,25 @@ class Gateway:
         try:
             self._record(flow, flow.response.status_code, flow.response)
         except Exception as exc:
+            self._rollback()
             print(f"ghostkey gateway: could not save event ({type(exc).__name__})")
 
     def error(self, flow: http.HTTPFlow) -> None:
         try:
             self._record(flow, None, None)
         except Exception as exc:
+            self._rollback()
             print(f"ghostkey gateway: could not save event ({type(exc).__name__})")
 
     # --- steps ---------------------------------------------------------------
+
+    def _rollback(self) -> None:
+        """End a failed transaction. Without this the connection stays stuck and every later insert fails."""
+        if self.conn is not None:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
 
     def start(self) -> None:
         """Open the DB and read the contract files. Safe to call more than once."""

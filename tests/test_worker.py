@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -87,6 +88,35 @@ class RunOnceTests(unittest.TestCase):
         self.load("normal")
         count, lines = self.run_once()
         self.assertEqual((count, lines), (2, []))
+
+
+class StopLoop(Exception):
+    pass
+
+
+class MainLoopTests(unittest.TestCase):
+    def test_database_error_rolls_back_the_open_transaction(self) -> None:
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        conn = db.connect(Path(tmp.name) / "test.db")
+        self.addCleanup(conn.close)
+        db.init(conn)
+
+        def failing_run_once(conn, behavior_hits_fn, baselines):
+            conn.execute("UPDATE events SET processed = 1")  # opens a write transaction
+            raise sqlite3.OperationalError("database is locked")
+
+        def stop(seconds: float) -> None:
+            raise StopLoop
+
+        with (
+            mock.patch.object(worker.db, "connect", return_value=conn),
+            mock.patch.object(worker, "run_once", failing_run_once),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            with self.assertRaises(StopLoop):
+                worker.main(sleep=stop)
+        self.assertFalse(conn.in_transaction)
 
 
 if __name__ == "__main__":

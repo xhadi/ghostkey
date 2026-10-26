@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from brain import worker
+from common import db
 from brain.analyst_rules import rules_analysis
 from brain.validate import validate
 from tests.brain_support import BrainTestCase
@@ -292,6 +293,25 @@ class BugHandlingTests(WorkerTestCase):
 
 
 FULL_LLM_ENV = {"LLM_BASE_URL": "http://llm.test/v1", "LLM_MODEL": "test-model", "LLM_API_KEY": "secret"}
+
+
+class ResetDuringLlmCallTests(WorkerTestCase):
+    def test_failed_store_does_not_keep_the_write_lock(self) -> None:
+        # The DB is reset while the LLM is thinking, so its answer points at a deleted incident.
+        def llm_fn(incident: dict, events: list[dict]) -> dict:
+            body = self.valid_llm_body(incident["incident_id"])
+            db.reset(self.conn)
+            return body
+
+        def stop(seconds: float) -> None:
+            raise StopLoop
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            with self.assertRaises(StopLoop):
+                worker.run_loop(self.conn, llm_fn, stop)
+        self.assertIn("FOREIGN KEY constraint failed", output.getvalue())
+        self.assertFalse(self.conn.in_transaction)
 
 
 class LoadLlmTests(unittest.TestCase):

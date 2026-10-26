@@ -285,6 +285,26 @@ class GatewayAddonTest(unittest.TestCase):
         self.assertEqual(row["stage"], "unknown")
         self.assertEqual(row["session_id"], "s_" + hashlib.sha1(b"172.30.0.66|anon").hexdigest()[:8])
 
+    def test_a_failed_save_does_not_block_later_saves(self):
+        self.gateway.conn.execute("PRAGMA busy_timeout=0")  # fail at once instead of after 5 s
+        other = db.connect(self.db_path)
+        self.addCleanup(other.close)
+        other.execute("BEGIN IMMEDIATE")  # another process holds the write lock
+        flow = self.make_flow(path="/")
+        self.gateway.request(flow)
+        with redirect_stdout(io.StringIO()) as output:
+            self.answer(flow)
+        self.assertIn("could not save event", output.getvalue())
+        other.rollback()
+        # A real token makes the gateway read `actions`. Inside a failed transaction that read
+        # keeps an old snapshot, and after another process writes, every insert would fail.
+        flow = self.make_flow(path="/api/v1/user/repos", auth=f"token {REAL_TOKEN}")
+        self.gateway.request(flow)
+        other.execute("CREATE TABLE another_write (x)")
+        other.commit()
+        self.answer(flow)
+        self.assertEqual(len(self.rows()), 1)
+
     def test_missing_user_agent_is_stored_as_null(self):
         flow = self.make_flow(path="/")
         del flow.request.headers["User-Agent"]
