@@ -71,11 +71,12 @@ docker compose exec attacker2 bash /work/scenario2.sh
 ```
 
 The attacker (172.30.0.77) uses `REAL-CI-01` (the `ci-bot` npm token) from a new machine:
-installs `@kfu/build-utils`, installs `@kfu/payments-sdk`, then publishes `@kfu/build-utils@9.9.10`.
+installs `@kfu/build-utils`, installs `@kfu/payments-sdk`, then tries to publish `@kfu/build-utils@9.9.10`.
+The real registry only lets `release-bot` publish, so the publish is refused (403). Ghostkey still sees and scores the attempt.
 
 Expect on the dashboard:
 - 1 incident, `signal_kind=behavior`, `confidence=medium`, score 80 (20+25+35), severity `high`, status `needs_review`
-- every event `routed_to=real` (no bait was used, so nothing is diverted at first)
+- every event `routed_to=real` (no bait was used, so nothing is diverted at first); the publish event has `result=denied`
 - actions: one `notify` done, one `revoke_credential` **pending**
 
 **The reviewer step.** `revoke_credential` is never automatic. A human decides on the dashboard:
@@ -89,8 +90,8 @@ Nothing is changed on Gitea or Verdaccio. After you decide, the dashboard shows 
 To see the effect, reset the packages (section 4), then run Scenario 2 again.
 The new requests from 172.30.0.77 are now blocked or diverted. The normal CI runner (172.30.0.10) is not affected.
 Scenario 3 publishes `@kfu/payments-sdk@6.6.6` to the decoy registry; `reset_packages.sh` removes it too.
-Note: the first run published `@kfu/build-utils@9.9.10` to the real registry, and a diverted re-run publishes it to the decoy.
-`reset_packages.sh` removes both.
+Note: on the real registry the scenario 2 publish is refused, so nothing is written there. A diverted re-run succeeds on the decoy
+and publishes `@kfu/build-utils@9.9.10` there. `reset_packages.sh` removes it.
 
 ### Scenario 3: leaked publish script
 

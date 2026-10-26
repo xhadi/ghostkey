@@ -200,6 +200,7 @@ every event `routed_to=decoy`, zero events to real, one `notify` action done, on
 Scenario 2 — stolen real credential, no bait (attacker container 172.30.0.77):
 `REAL-CI-01` (npm token of `ci-bot`, baseline: source 172.30.0.10, action install, target `@kfu/build-utils`, no publish):
 install `@kfu/build-utils` from new IP → install `@kfu/payments-sdk` → publish `@kfu/build-utils@9.9.10`.
+The real Verdaccio only lets `release-bot` publish, so the publish is refused (`result=denied`, 403) but still `routed_to=real`; `unexpected_publish` still fires, so the score stays 80.
 Expected: 1 incident, `signal_kind=behavior`, `confidence=medium`, score 80 (20+25+35), `high`, `needs_review`,
 every event `routed_to=real`, one `notify` action done, one `revoke_credential` action `pending`.
 

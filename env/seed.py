@@ -3,7 +3,7 @@
 Usage (normally started by env/setup.sh):
     python3 -u -m env.seed wait            # wait until all four services answer
     python3 -m env.seed all             # seed Gitea + Verdaccio, write .env / secrets / credentials.json
-    python3 -m env.seed reset-packages  # remove the attack versions (9.9.9 on decoy, 9.9.10 on real)
+    python3 -m env.seed reset-packages  # remove the attack versions (9.9.9 and 9.9.10 on decoy)
 
 Needs the env var SEED_PASSWORD (a synthetic password for the demo accounts).
 Nothing here prints a token or a password.
@@ -41,7 +41,7 @@ DECOY_NPM_USER = "registry-mirror"
 ATTACK_VERSIONS = [
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.9"),
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.10"),  # a diverted scenario 2 re-run
-    (NPM_REAL, "release-bot", "@kfu/build-utils", "9.9.10"),
+    (NPM_REAL, "release-bot", "@kfu/build-utils", "9.9.10"),  # normally absent: the real registry refuses ci-bot; cleans older states
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/payments-sdk", "6.6.6"),     # scenario 3
 ]
 

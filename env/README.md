@@ -32,8 +32,9 @@ bash attacker/run_all.sh                                # all of the above in or
 bash env/reset_packages.sh                              # before running a scenario again
 ```
 
-`reset_packages.sh` removes `@kfu/build-utils@9.9.9` (decoy registry) and `@kfu/build-utils@9.9.10`
-(real registry) directly on the registries, so it creates no events.
+`reset_packages.sh` removes `@kfu/build-utils@9.9.9` and `@kfu/build-utils@9.9.10` (decoy registry; the latter only exists after a
+diverted scenario 2 re-run) directly on the registries, so it creates no events. It also tries to remove 9.9.10 from the real
+registry, which only matters if an older run (before publish was limited to `release-bot`) left it there.
 Old incidents stay in the dashboard until you clear the DB (stop gateway/core/brain/dashboard, then `docker volume rm ghostkey_gkdata`).
 
 ## What is where
