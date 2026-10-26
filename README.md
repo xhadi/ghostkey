@@ -39,7 +39,7 @@ docker compose exec ci-runner bash /work/normal.sh
 The CI runner (172.30.0.10) uses `REAL-CI-01` as usual: `npm whoami`, then installs `@kfu/build-utils`.
 Expect: zero signals and zero incidents. The events show up in the traffic triage panel, but nothing is flagged.
 
-Every client script starts with a short countdown (`DEMO_START_DELAY`, default 3 seconds) so you can switch to the dashboard.
+Every client script starts with a short countdown (`DEMO_START_DELAY`, default 3 seconds) so you can switch to the dashboard. `run_all.sh` skips it.
 To run everything in the final order (normal, noise, scenarios 1 to 4) from the host:
 
 ```bash

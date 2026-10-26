@@ -18,6 +18,9 @@ die() {
 intro() {
   local seconds="$START_DELAY"
   echo "=== $1 ==="
+  if [ "$seconds" -le 0 ]; then
+    return
+  fi
   printf "Starting in"
   while [ "$seconds" -gt 0 ]; do
     printf " %s..." "$seconds"

@@ -234,7 +234,7 @@ docker compose exec attacker2 bash /work/scenario2.sh
 docker compose exec attacker3 bash /work/scenario3.sh
 docker compose exec attacker4 bash /work/scenario4.sh
 docker compose exec dev-laptop bash /work/noise.sh
-bash attacker/run_all.sh                  # normal, noise, scenario1..4 in order (each starts with a 3 s countdown, DEMO_START_DELAY)
+bash attacker/run_all.sh                  # normal, noise, scenario1..4 in order (no countdown; single scripts start with a 3 s countdown, DEMO_START_DELAY)
 docker compose run --rm core python -m fixtures.load_fixtures --reset
 docker compose logs -f gateway core brain
 # dashboard: http://localhost:8501
