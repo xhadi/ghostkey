@@ -19,16 +19,20 @@ auth:
     max_users: 100
 
 packages:
-  # Private scope: you must be logged in to read, publish or unpublish.
+  # Only release-bot may publish or unpublish. ci-bot (token REAL-CI-01) only installs; its baseline says
+  # may_publish: false. So when scenario 2 uses a stolen ci-bot token to publish, the registry refuses (403).
+  # Ghostkey still detects the attempt: the request reaches this registry through the gateway and is logged
+  # as an unexpected_publish with result=denied.
+  # Private scope: you must be logged in to read.
   '@kfu/*':
     access: $authenticated
-    publish: $authenticated
-    unpublish: $authenticated
+    publish: release-bot
+    unpublish: release-bot
   # Everything else: same rules. There is no uplink, so unknown packages are simply 404.
   '**':
     access: $authenticated
-    publish: $authenticated
-    unpublish: $authenticated
+    publish: release-bot
+    unpublish: release-bot
 
 server:
   keepAliveTimeout: 60
