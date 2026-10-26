@@ -6,6 +6,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+intro "Scenario 1: leaked bait token"
+
 LOOT="$HERE/loot/payments-api.env"
 [ -s "$LOOT" ] || die "$LOOT is missing. Run 'bash env/setup.sh' on the host first."
 GIT_TOKEN="$(sed -n 's/^GITEA_TOKEN=//p' "$LOOT" | tr -d '\r')"

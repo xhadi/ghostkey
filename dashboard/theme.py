@@ -328,15 +328,20 @@ BASE_CSS = """
 .stApp .st-key-filters [data-baseweb="tag"] span{color:var(--plum-700);}
 .stApp .gk-triage{margin-bottom:12px;}
 .stApp .gk-triage h2{font-size:15px; margin-bottom:8px;}
-.gk-funnel{display:flex; flex-wrap:wrap; gap:6px 0;}
-.stApp .gk-funnel li{position:relative; flex:0 1 auto; display:flex; align-items:baseline; gap:6px; white-space:nowrap; padding:6px 12px 6px 18px; background:var(--white); border:1px solid var(--rule); border-left-width:0;}
-.stApp .gk-funnel li:first-child{padding-left:12px; border-left-width:1px; border-radius:8px 0 0 8px;}
-.stApp .gk-funnel li:last-child{border-radius:0 8px 8px 0; border-color:var(--plum-700); background:var(--lavender);}
-.gk-funnel li+li::before{content:""; position:absolute; left:-1px; top:50%; width:8px; height:8px; margin-top:-4px; border-top:1px solid var(--plum-600); border-right:1px solid var(--plum-600); transform:translateX(-5px) rotate(45deg); background:var(--canvas);}
-.stApp .gk-step-count{font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; line-height:1.2;}
-.stApp .gk-step-label{font-size:13px; color:var(--plum-950);}
-.stApp .gk-step-note{font-size:13px; color:var(--plum-600); font-variant-numeric:tabular-nums;}
-.stApp .gk-step-note::before{content:"·"; margin-right:6px;}
+.stApp .gk-triage .gk-tri-head{display:flex; align-items:baseline; gap:12px; margin-bottom:8px;}
+.stApp .gk-triage .gk-tri-head h2{margin-bottom:0;}
+.stApp .gk-tri-total{font-size:13px; color:var(--plum-600); font-variant-numeric:tabular-nums;}
+.gk-tri-bar{display:flex; width:100%; height:14px; border-radius:7px; overflow:hidden; background:var(--rule);}
+.gk-tri-seg{flex:0 0 auto; min-width:6px; height:100%;}
+.gk-tri-normal{background:var(--real);} .gk-tri-watched{background:var(--amber);} .gk-tri-incident{background:var(--alarm);}
+.gk-tri-cards{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:12px;}
+.gk-tri-card{background:var(--white); border:1px solid var(--rule); border-left-width:4px; border-radius:8px; padding:10px 14px;}
+.gk-tri-card-normal{border-left-color:var(--real);} .gk-tri-card-watched{border-left-color:var(--amber);} .gk-tri-card-incident{border-left-color:var(--alarm);}
+.gk-tri-figures{display:flex; align-items:baseline; gap:8px;}
+.stApp .gk-tri-count{font-size:24px; font-weight:500; line-height:1.2; font-variant-numeric:tabular-nums;}
+.stApp .gk-tri-percent{font-size:13px; color:var(--plum-600); font-variant-numeric:tabular-nums;}
+.stApp .gk-tri-label{display:block; font-size:14px; font-weight:600; color:var(--plum-950);}
+.stApp .gk-tri-line{font-size:13px; color:var(--plum-600); margin-top:2px;}
 .stApp .gk-triage-note{font-size:13px; color:var(--plum-600); padding:6px 0 8px;}
 .stApp .gk-triage .gk-quiet{padding-top:2px;}
 .stApp .gk-triage .gk-table th,.stApp .gk-triage .gk-table td{padding:3px 10px; font-size:13px;}
@@ -345,7 +350,7 @@ BASE_CSS = """
 .stApp .gk-pill-flagged{background:#F6EBCF; color:var(--amber); border-color:transparent;}
 .stApp .gk-pill-normal{background:#DCEEE9; color:var(--real); border-color:transparent;}
 
-@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;} .st-key-traffic{padding:20px 20px 0;} .st-key-view{padding:0 20px !important;} .stApp .gk-funnel li{white-space:normal; border-left-width:1px; border-radius:8px; padding-left:12px; margin-right:6px;} .gk-funnel li+li::before{display:none;}}
+@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;} .st-key-traffic{padding:20px 20px 0;} .st-key-view{padding:0 20px !important;} .gk-tri-cards{grid-template-columns:1fr;}}
 """
 
 

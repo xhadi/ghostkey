@@ -40,6 +40,7 @@ def check_decoy_gitea() -> None:
     check(content.bait_token("BAIT-CI-02") in npmrc and "//gateway:8081/:_authToken=" in npmrc, "ops/ci-pipeline/.npmrc holds BAIT-CI-02 (registry gateway:8081)")
     publish = raw_file(seed.GITEA_DECOY, "ops/release-tools", "scripts/publish.sh", auth)
     check(content.bait_token("BAIT-PUB-03") in publish, "ops/release-tools/scripts/publish.sh holds BAIT-PUB-03")
+    check(seed.PUBLISH_LOOT_FILE.read_text() == content.release_publish_script(), "attacker/loot/release-publish.sh matches the planted publish.sh")
     status, _ = request("GET", f"{seed.GITEA_DECOY}/api/v1/user", token_header=f"token {content.bait_token('BAIT-SRC-01')}")
     check(status == 401, "the bait string itself is not valid on the decoy Gitea")
 
@@ -52,6 +53,11 @@ def check_real_gitea() -> None:
     status, _ = request("GET", f"{seed.GITEA_REAL}/api/v1/user", token_header=f"token {content.bait_token('BAIT-SRC-01')}")
     check(status == 401, "the bait string itself is not valid on the real Gitea")
     check(seed.LOOT_FILE.read_text() == content.payments_env_file(seed.REAL_GIT_USER), "attacker/loot/payments-api.env matches the planted .env")
+    status, body = request("GET", f"{seed.GITEA_REAL}/api/v1/repos/dev/docs/raw/runbooks/deploy.md?ref=main", basic=basic)
+    check(status == 200 and content.bait_token("BAIT-DOC-04") in str(body), "dev/docs/runbooks/deploy.md holds BAIT-DOC-04")
+    status, _ = request("GET", f"{seed.GITEA_REAL}/api/v1/user", token_header=f"token {content.bait_token('BAIT-DOC-04')}")
+    check(status == 401, "the BAIT-DOC-04 string itself is not valid on the real Gitea")
+    check(seed.DOCS_LOOT_FILE.read_text() == content.deploy_runbook(), "attacker/loot/docs-deploy.md matches the planted runbook")
 
 
 def tarball_status(base: str, token: str, package: str) -> int:

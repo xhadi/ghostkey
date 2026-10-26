@@ -48,7 +48,7 @@ echo "[3/4] Seeding repos, packages, baits..."
 seed all
 
 echo "[4/4] Summary"
-echo "  real  Gitea    : org dev (payments-api with planted BAIT-SRC-01, student-portal, docs)"
+echo "  real  Gitea    : org dev (payments-api with planted BAIT-SRC-01, student-portal, docs with BAIT-DOC-04 in runbooks/deploy.md)"
 echo "  decoy Gitea    : org ops (ci-pipeline with BAIT-CI-02, release-tools with BAIT-PUB-03), org dev"
 echo "  real  Verdaccio: users ci-bot (token = REAL-CI-01), release-bot; @kfu/build-utils, @kfu/payments-sdk"
 echo "  decoy Verdaccio: user registry-mirror; same two packages"

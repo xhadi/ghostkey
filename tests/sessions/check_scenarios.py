@@ -1,6 +1,6 @@
 """Check the CLAUDE.md "Demo scenarios" acceptance results against the live DB.
 
-Run after the three client scripts (normal.sh, scenario1.sh, scenario2.sh):
+Run after the client scripts (normal.sh, noise.sh, scenario1.sh ... scenario4.sh; see attacker/run_all.sh):
     docker compose run --rm --no-deps core python -m tests.sessions.check_scenarios
 
 Prints PASS/FAIL per check and exits with 1 if any check failed.
@@ -15,6 +15,9 @@ from common import db
 NORMAL_IP = "172.30.0.10"
 SCENARIO1_IP = "172.30.0.66"
 SCENARIO2_IP = "172.30.0.77"
+SCENARIO3_IP = "172.30.0.88"
+SCENARIO4_IP = "172.30.0.99"
+NOISE_IP = "172.30.0.50"
 
 failures: list[str] = []
 
@@ -100,7 +103,9 @@ def check_scenario1(conn) -> None:
     check_analysis(conn, inc["incident_id"])
 
 
-def check_analysis(conn, incident_id: str) -> None:
+def check_analysis(conn, incident_id: str, expect_label: str | None = None,
+                   llm_labels: tuple[str, ...] = ()) -> None:
+    """expect_label is what the rules-only analysis gives. An LLM analysis may pick one of llm_labels instead."""
     analysis = conn.execute("SELECT * FROM analyses WHERE incident_id = ?", (incident_id,)).fetchone()
     check(analysis is not None, "analysis exists")
     if analysis is None:
@@ -109,7 +114,14 @@ def check_analysis(conn, incident_id: str) -> None:
     labels = [a.get("label") for a in body.get("alternatives", [])]
     print(f"        analysis source={analysis['source']} valid={analysis['valid']} "
           f"based_on_event_count={analysis['based_on_event_count']} hypothesis={body.get('hypothesis', {}).get('label')}")
+    actual = body.get("hypothesis", {}).get("label")
+    if actual == "automated_secret_scanner":
+        # Then the scanner idea is the hypothesis itself, not an alternative.
+        check(actual in llm_labels, "analyst hypothesis is automated_secret_scanner (allowed for an LLM analysis)", str(actual))
+        return
     check("automated_secret_scanner" in labels, "analyst alternatives include automated_secret_scanner", str(labels))
+    if expect_label is not None:
+        check(actual == expect_label, f"analyst hypothesis={expect_label}", str(actual))
 
 
 def check_scenario2(conn) -> None:
@@ -131,15 +143,75 @@ def check_scenario2(conn) -> None:
     check(count_actions(conn, inc["incident_id"], "revoke_credential", "pending") == 1, "exactly one revoke_credential pending")
 
 
+def check_bait_incident(conn, ip: str, bait_id: str, score: int, severity: str,
+                        stages: list[str], hypothesis: str, llm_labels: tuple[str, ...] = ()) -> None:
+    """Shared checks for a single-bait incident (scenarios 3 and 4)."""
+    events = events_of(conn, ip)
+    found = incidents_of(conn, ip)
+    check(len(found) == 1, "exactly 1 incident", f"{len(found)}")
+    check(bool(events) and all(e["routed_to"] == "decoy" for e in events), "every event routed_to=decoy",
+          f"{sorted({e['routed_to'] for e in events})}")
+    check(not [e for e in events if e["routed_to"] == "real"], "zero events routed to real")
+    if len(found) != 1:
+        return
+    inc = found[0]
+    check(inc["signal_kind"] == "bait", "signal_kind=bait", inc["signal_kind"])
+    check(inc["confidence"] == "high", "confidence=high", inc["confidence"])
+    check(inc["score"] == score, f"score {score}", str(inc["score"]))
+    check(inc["severity"] == severity, f"severity={severity}", inc["severity"])
+    check(json.loads(inc["stages"]) == stages, f"stages {json.dumps(stages)}", inc["stages"])
+    check(json.loads(inc["token_ids"]) == [bait_id], f"only {bait_id} is involved", inc["token_ids"])
+    check(all(e["incident_id"] == inc["incident_id"] for e in events), "all events belong to this incident")
+    check(count_actions(conn, inc["incident_id"], "notify", "done") == 1, "exactly one notify action done")
+    check(count_actions(conn, inc["incident_id"], "disable_bait", "done", bait_id) == 1,
+          f"one disable_bait done for {bait_id}")
+    check_analysis(conn, inc["incident_id"], hypothesis, llm_labels)
+
+
+def check_scenario3(conn) -> None:
+    print(f"\nScenario 3 - leaked publish script ({SCENARIO3_IP}):")
+    check_bait_incident(conn, SCENARIO3_IP, "BAIT-PUB-03", 75, "high", ["publish"], "package_publish")
+
+
+def check_scenario4(conn) -> None:
+    print(f"\nScenario 4 - scanner with a leaked doc token ({SCENARIO4_IP}):")
+    events = events_of(conn, SCENARIO4_IP)
+    check(bool(events) and all("ghostkey-demo-scanner" in (e["user_agent"] or "") for e in events),
+          "every event carries the demo scanner user agent")
+    check_bait_incident(conn, SCENARIO4_IP, "BAIT-DOC-04", 60, "medium", ["source"], "recon_only",
+                        llm_labels=("automated_secret_scanner",))
+
+
+def check_noise(conn) -> None:
+    print(f"\nBackground noise ({NOISE_IP}):")
+    events = events_of(conn, NOISE_IP)
+    check(len(events) > 0, "the gateway recorded events", f"{len(events)} events")
+    kinds = sorted({e["token_kind"] for e in events})
+    check("unknown" in kinds, "the mistyped token shows up as token_kind=unknown", str(kinds))
+    check(not [e for e in events if e["token_kind"] in ("bait", "real")], "no bait or real token was used")
+    signals = conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE event_id IN (SELECT event_id FROM events WHERE source_ip = ?)", (NOISE_IP,)
+    ).fetchone()[0]
+    check(signals == 0, "zero signals", f"{signals} signals")
+    found = incidents_of(conn, NOISE_IP)
+    check(not found, "zero incidents involving this IP", f"{len(found)} incidents")
+    linked = [e for e in events if e["incident_id"]]
+    check(not linked, "no event is linked to an incident", f"{len(linked)} linked")
+
+
 def main() -> None:
     conn = db.connect()
     total = conn.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
     print(f"incidents in DB: {total}")
-    for ip, label in ((NORMAL_IP, "Normal"), (SCENARIO1_IP, "Scenario 1"), (SCENARIO2_IP, "Scenario 2")):
+    for ip, label in ((NORMAL_IP, "Normal"), (NOISE_IP, "Noise"), (SCENARIO1_IP, "Scenario 1"),
+                      (SCENARIO2_IP, "Scenario 2"), (SCENARIO3_IP, "Scenario 3"), (SCENARIO4_IP, "Scenario 4")):
         print_event_table(conn, ip, label)
     check_normal(conn)
     check_scenario1(conn)
     check_scenario2(conn)
+    check_scenario3(conn)
+    check_scenario4(conn)
+    check_noise(conn)
     print()
     if failures:
         print(f"{len(failures)} check(s) FAILED")

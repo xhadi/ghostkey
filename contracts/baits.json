@@ -25,5 +25,14 @@
     "stage": "publish",
     "planted_at": "decoy Gitea: repo ops/release-tools, file scripts/publish.sh (P1, optional)",
     "decoy_credential_env": "DECOY_NPM_TOKEN"
+  },
+  {
+    "bait_id": "BAIT-DOC-04",
+    "token": "42c627e12587324cfc0b4c2652e3fcd8dc154460",
+    "kind": "gitea_token",
+    "service": "git",
+    "stage": "source",
+    "planted_at": "real Gitea: repo dev/docs, file runbooks/deploy.md",
+    "decoy_credential_env": "DECOY_GIT_TOKEN"
   }
 ]

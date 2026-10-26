@@ -25,6 +25,8 @@ ENV_FILE = ROOT / ".env"
 SECRETS_DIR = ROOT / "attacker" / ".secrets"
 CI_BOT_TOKEN_FILE = SECRETS_DIR / "real-ci-01.token"
 LOOT_FILE = ROOT / "attacker" / "loot" / "payments-api.env"
+DOCS_LOOT_FILE = ROOT / "attacker" / "loot" / "docs-deploy.md"
+PUBLISH_LOOT_FILE = ROOT / "attacker" / "loot" / "release-publish.sh"
 
 GITEA_REAL = "http://gitea-real:3000"
 GITEA_DECOY = "http://gitea-decoy:3000"
@@ -40,6 +42,7 @@ ATTACK_VERSIONS = [
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.9"),
     (NPM_DECOY, DECOY_NPM_USER, "@kfu/build-utils", "9.9.10"),  # a diverted scenario 2 re-run
     (NPM_REAL, "release-bot", "@kfu/build-utils", "9.9.10"),
+    (NPM_DECOY, DECOY_NPM_USER, "@kfu/payments-sdk", "6.6.6"),     # scenario 3
 ]
 
 
@@ -92,7 +95,8 @@ def seed_real_gitea() -> None:
     gitea.seed_repos(GITEA_REAL, REAL_GIT_USER, pw, content.real_repos(REAL_GIT_USER))
     LOOT_FILE.parent.mkdir(parents=True, exist_ok=True)
     LOOT_FILE.write_text(content.payments_env_file(REAL_GIT_USER), encoding="utf-8")
-    print(f"  attacker loot copy written: {LOOT_FILE.relative_to(ROOT)}")
+    DOCS_LOOT_FILE.write_text(content.deploy_runbook(), encoding="utf-8")
+    print(f"  attacker loot copies written: {LOOT_FILE.relative_to(ROOT)}, {DOCS_LOOT_FILE.relative_to(ROOT)}")
 
 
 def seed_decoy_gitea() -> None:
@@ -100,6 +104,8 @@ def seed_decoy_gitea() -> None:
     pw = password()
     token = gitea.ensure_token(GITEA_DECOY, DECOY_GIT_USER, pw, "ghostkey-decoy", read_env_value("DECOY_GIT_TOKEN"))
     gitea.seed_repos(GITEA_DECOY, DECOY_GIT_USER, pw, content.decoy_repos(DECOY_GIT_USER))
+    PUBLISH_LOOT_FILE.write_text(content.release_publish_script(), encoding="utf-8")
+    print(f"  attacker loot copy written: {PUBLISH_LOOT_FILE.relative_to(ROOT)}")
     update_env({"DECOY_GIT_USER": DECOY_GIT_USER, "DECOY_GIT_TOKEN": token})
     print("  DECOY_GIT_USER / DECOY_GIT_TOKEN written to .env")
 

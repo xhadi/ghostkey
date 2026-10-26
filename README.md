@@ -39,6 +39,15 @@ docker compose exec ci-runner bash /work/normal.sh
 The CI runner (172.30.0.10) uses `REAL-CI-01` as usual: `npm whoami`, then installs `@kfu/build-utils`.
 Expect: zero signals and zero incidents. The events show up in the traffic triage panel, but nothing is flagged.
 
+Every client script starts with a short countdown (`DEMO_START_DELAY`, default 3 seconds) so you can switch to the dashboard.
+To run everything in the final order (normal, noise, scenarios 1 to 4) from the host:
+
+```bash
+bash attacker/run_all.sh
+```
+
+Each scenario uses its own client IP and its own bait. If two scenarios shared an IP or a bait, core would merge them into one incident.
+
 ### Scenario 1: leaked bait
 
 ```bash
@@ -79,12 +88,52 @@ Nothing is changed on Gitea or Verdaccio. After you decide, the dashboard shows 
 
 To see the effect, reset the packages (section 4), then run Scenario 2 again.
 The new requests from 172.30.0.77 are now blocked or diverted. The normal CI runner (172.30.0.10) is not affected.
+Scenario 3 publishes `@kfu/payments-sdk@6.6.6` to the decoy registry; `reset_packages.sh` removes it too.
 Note: the first run published `@kfu/build-utils@9.9.10` to the real registry, and a diverted re-run publishes it to the decoy.
 `reset_packages.sh` removes both.
 
+### Scenario 3: leaked publish script
+
+```bash
+docker compose exec attacker3 bash /work/scenario3.sh
+```
+
+The attacker (172.30.0.88) has a copy of `ops/release-tools/scripts/publish.sh` with `BAIT-PUB-03`:
+`npm whoami`, `npm search @kfu`, installs `@kfu/payments-sdk`, then publishes `@kfu/payments-sdk@6.6.6`.
+
+Expect: 1 incident, `signal_kind=bait`, `confidence=high`, score 75 (60+15), severity `high`, stages `publish` only,
+every event `routed_to=decoy`, one `notify` done, one `disable_bait` done for `BAIT-PUB-03`, hypothesis `package_publish`.
+
+### Scenario 4: scanner with a leaked doc token
+
+```bash
+docker compose exec attacker4 bash /work/scenario4.sh
+```
+
+The attacker (172.30.0.99, user agent `ghostkey-demo-scanner/1.0`) found `BAIT-DOC-04` in the `dev/docs` deploy runbook
+and only reads through the Gitea API: `user`, `user/repos`, `repos/search`, a README. No clone, no push, no npm.
+
+Expect: 1 incident, `signal_kind=bait`, `confidence=high`, score 60, severity `medium`, stages `source` only,
+every event `routed_to=decoy`, one `notify` done, one `disable_bait` done for `BAIT-DOC-04`,
+hypothesis `recon_only`, and `automated_secret_scanner` as an alternative.
+
+`BAIT-DOC-04` lives in the real Gitea repo `dev/docs`. After you pull this change, run `bash env/setup.sh` once
+(it plants the bait and writes the loot files), then restart the gateway so it loads the new bait:
+`docker compose up -d --force-recreate gateway`. Then `docker compose up -d` creates the new client containers.
+
+### Background noise
+
+```bash
+docker compose exec dev-laptop bash /work/noise.sh
+```
+
+The dev laptop (172.30.0.50) sends ordinary traffic: an anonymous Gitea search, an anonymous npm install (refused),
+and one Gitea request with a mistyped token (`token_kind=unknown`).
+Expect: zero signals and zero incidents. The events show up in the traffic panel only.
+
 ## 3. Check the results
 
-After running all three scripts, check the acceptance results against the live DB:
+After running all the scripts (or `run_all.sh`), check the acceptance results against the live DB:
 
 ```bash
 docker compose run --rm --no-deps core python -m tests.sessions.check_scenarios

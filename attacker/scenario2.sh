@@ -5,6 +5,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+intro "Scenario 2: stolen real credential"
+
 load_ci_token
 make_workdir
 write_npmrc "$CI_TOKEN"

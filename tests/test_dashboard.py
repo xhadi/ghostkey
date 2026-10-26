@@ -578,17 +578,52 @@ class TriageTests(DashboardTestCase):
         session = {"incident_id": None, "points": 0, "token_kind": "unknown"}
         self.assertEqual(views.session_verdict(session), ("unscored", "No signals"))
 
-    def test_funnel_html_shows_the_steps_and_the_note(self) -> None:
+    def test_funnel_html_shows_the_bar_cards_and_the_note(self) -> None:
         funnel = queries.triage_funnel(self.conn)
         panel = views.funnel_html(funnel)
         self.assertIn("Traffic triage", panel)
-        for label in ("requests checked", "passed silently", "flagged, watched", "incidents", "analyzed"):
-            self.assertIn(label, panel)
-        self.assertIn(f"{funnel['in_incidents']} requests", panel)
-        self.assertIn(f"{funnel['analyzed_llm']} by LLM", panel)
-        self.assertIn("Every request gets a cheap baseline check. Only incidents go to the analyst.", panel)
+        self.assertIn(f"{funnel['requests']} requests checked", panel)
+        for label in ("Normal", "Watched", "In incidents"):
+            self.assertIn(f">{label}<", panel)
+        self.assertIn("Matched the token&#x27;s usual behavior", panel)
+        self.assertIn("below the incident threshold (60 points)", panel)
+        self.assertIn("shown on the Incidents tab.", panel)
+        self.assertIn("by the AI analyst", panel)
+        self.assertIn("by fixed rules", panel)
+        self.assertIn("Only incidents go to the analyst.", panel)
         self.assertNotIn("<table", panel)
         self.assertNotIn("\n\n", panel)
+
+    def test_funnel_html_percentages_and_plurals(self) -> None:
+        funnel = {"requests": 20, "passed": 12, "flagged": 3, "in_incidents": 5,
+                  "incidents": 2, "analyzed": 2, "analyzed_llm": 0}
+        panel = views.funnel_html(funnel)
+        self.assertIn('title="12 requests (60%)"', panel)
+        self.assertIn('title="3 requests (15%)"', panel)
+        self.assertIn('title="5 requests (25%)"', panel)
+        self.assertIn("Part of 2 incidents, shown on the Incidents tab.", panel)
+        self.assertIn("2 incidents opened → 2 analyzed (0 by the AI analyst, 2 by fixed rules)", panel)
+        single = dict(funnel, incidents=1, analyzed=1)
+        panel = views.funnel_html(single)
+        self.assertIn("Part of 1 incident, shown on the Incidents tab.", panel)
+        self.assertIn("1 incident opened → 1 analyzed", panel)
+
+    def test_funnel_html_skips_empty_segments_and_never_divides_by_zero(self) -> None:
+        funnel = {"requests": 4, "passed": 4, "flagged": 0, "in_incidents": 0,
+                  "incidents": 0, "analyzed": 0, "analyzed_llm": 0}
+        panel = views.funnel_html(funnel)
+        self.assertEqual(panel.count('class="gk-tri-seg'), 1)
+        self.assertIn('title="4 requests (100%)"', panel)
+        self.assertIn("0%", panel)
+        empty = {k: 0 for k in funnel}
+        panel = views.funnel_html(empty)
+        self.assertEqual(panel.count('class="gk-tri-seg'), 0)
+        self.assertIn("0 requests checked", panel)
+
+    def test_funnel_html_clamps_rules_count_at_zero(self) -> None:
+        funnel = {"requests": 1, "passed": 0, "flagged": 0, "in_incidents": 1,
+                  "incidents": 1, "analyzed": 1, "analyzed_llm": 3}
+        self.assertIn("3 by the AI analyst, 0 by fixed rules", views.funnel_html(funnel))
 
     def test_sessions_html_lists_every_session_with_last_seen(self) -> None:
         sessions = queries.list_sessions(self.conn)

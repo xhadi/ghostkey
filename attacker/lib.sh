@@ -7,10 +7,24 @@ NPM_URL="http://gateway:8081/"
 NPM_HOST_PATH="//gateway:8081/"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAUSE_SECONDS="${DEMO_PAUSE:-2}"   # so the dashboard visibly updates between steps
+START_DELAY="${DEMO_START_DELAY:-3}"   # time to switch to the dashboard before the first request
 
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+# intro <title>: print the title, then count down so the presenter can open the dashboard.
+intro() {
+  local seconds="$START_DELAY"
+  echo "=== $1 ==="
+  printf "Starting in"
+  while [ "$seconds" -gt 0 ]; do
+    printf " %s..." "$seconds"
+    sleep 1
+    seconds=$((seconds - 1))
+  done
+  echo " go"
 }
 
 # step <n> <total> <text>

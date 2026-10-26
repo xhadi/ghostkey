@@ -203,6 +203,19 @@ install `@kfu/build-utils` from new IP → install `@kfu/payments-sdk` → publi
 Expected: 1 incident, `signal_kind=behavior`, `confidence=medium`, score 80 (20+25+35), `high`, `needs_review`,
 every event `routed_to=real`, one `notify` action done, one `revoke_credential` action `pending`.
 
+Scenario 3 — leaked publish script (attacker3 172.30.0.88):
+`BAIT-PUB-03` (from `ops/release-tools/scripts/publish.sh`) on Verdaccio: whoami → search `@kfu` → install `@kfu/payments-sdk` → publish `@kfu/payments-sdk@6.6.6`.
+Expected: exactly 1 incident, `signal_kind=bait`, `confidence=high`, score 75 (60+15), `high`, stages `["publish"]`,
+every event `routed_to=decoy`, zero events to real, one `notify` action done, one `disable_bait` action done for `BAIT-PUB-03`, hypothesis `package_publish`.
+
+Scenario 4 — scanner with a leaked doc token (attacker4 172.30.0.99, user agent `ghostkey-demo-scanner/1.0`):
+`BAIT-DOC-04` (from `dev/docs` `runbooks/deploy.md`) on Gitea, read-only: `GET /api/v1/user` → `user/repos` → `repos/search` → `repos/ops/ci-pipeline/contents/README.md`.
+Expected: exactly 1 incident, `signal_kind=bait`, `confidence=high`, score 60, `medium`, stages `["source"]`,
+every event `routed_to=decoy`, one `notify` action done, one `disable_bait` action done for `BAIT-DOC-04`, rules-only hypothesis `recon_only`, analyst alternative includes `automated_secret_scanner` (a live LLM may instead pick `automated_secret_scanner` as the hypothesis itself).
+
+Noise — dev-laptop 172.30.0.50: anonymous Gitea search, anonymous npm install (refused), one Gitea request with a mistyped token (`token_kind=unknown`):
+zero signals, zero incidents.
+
 Normal traffic — ci-runner 172.30.0.10 with `REAL-CI-01` installing `@kfu/build-utils`: zero signals, zero incidents.
 
 You can test core, brain and dashboard WITHOUT the gateway:
@@ -217,6 +230,10 @@ docker compose pull                       # do this on good wifi (Saturday night
 docker compose up -d --build
 docker compose exec attacker bash /work/scenario1.sh
 docker compose exec attacker2 bash /work/scenario2.sh
+docker compose exec attacker3 bash /work/scenario3.sh
+docker compose exec attacker4 bash /work/scenario4.sh
+docker compose exec dev-laptop bash /work/noise.sh
+bash attacker/run_all.sh                  # normal, noise, scenario1..4 in order (each starts with a 3 s countdown, DEMO_START_DELAY)
 docker compose run --rm core python -m fixtures.load_fixtures --reset
 docker compose logs -f gateway core brain
 # dashboard: http://localhost:8501

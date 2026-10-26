@@ -117,10 +117,31 @@ services:
     networks:
       devnet: { ipv4_address: 172.30.0.77 }
 
+  attacker3:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.88 }
+
+  attacker4:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.99 }
+
+  dev-laptop:
+    image: node:20-bookworm
+    command: sleep infinity
+    volumes: [./attacker:/work]
+    networks:
+      devnet: { ipv4_address: 172.30.0.50 }
+
 networks:
   devnet:
     ipam:
-      # Static IPs (gateway .2, clients .10/.66/.77) live below .128; containers without a fixed IP get .128+.
+      # Static IPs (gateway .2, clients .10/.50/.66/.77/.88/.99) live below .128; containers without a fixed IP get .128+.
       config: [{ subnet: 172.30.0.0/24, ip_range: 172.30.0.128/25 }]
   realnet:
     internal: true

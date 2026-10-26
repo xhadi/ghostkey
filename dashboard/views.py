@@ -466,30 +466,80 @@ def session_verdict(session: dict) -> tuple[str, str]:
     return "unscored", "No signals"
 
 
-def _funnel_step_html(count: int, label: str, note: str = "") -> str:
-    """One slim step: 'count label' on one line, with an optional muted note after it."""
-    small = f'<small class="gk-step-note">{esc(note)}</small>' if note else ""
-    return f'<li><b class="gk-step-count">{int(count)}</b><span class="gk-step-label">{esc(label)}</span>{small}</li>'
-
-
 def no_traffic_html() -> str:
     return '<section class="gk-section gk-triage"><h2>Traffic triage</h2><p class="gk-quiet">No traffic yet</p></section>'
 
 
+def _plural(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _percent(count: int, total: int) -> int:
+    """Whole-number share of the total; 0 when there is nothing to divide."""
+    return int(count * 100 / total + 0.5) if total > 0 else 0
+
+
+def _triage_buckets(funnel: dict[str, int]) -> list[tuple[str, str, int, str]]:
+    """(css key, label, request count, plain-English line) for the three parallel buckets."""
+    incidents = funnel["incidents"]
+    incident_word = _plural(incidents, "incident", "incidents")
+    return [
+        ("normal", "Normal", funnel["passed"],
+         "Matched the token's usual behavior, or carried no signal. No action needed."),
+        ("watched", "Watched", funnel["flagged"],
+         "Unusual, but below the incident threshold (60 points). Kept for context."),
+        ("incident", "In incidents", funnel["in_incidents"],
+         f"Part of {incidents} {incident_word}, shown on the Incidents tab."),
+    ]
+
+
+def _triage_bar_html(buckets: list[tuple[str, str, int, str]], total: int) -> str:
+    """One stacked bar. Segment width follows the count; empty buckets are left out."""
+    segments = ""
+    for key, label, count, _line in buckets:
+        if count <= 0:
+            continue
+        percent = _percent(count, total)
+        title = f"{count} {_plural(count, 'request', 'requests')} ({percent}%)"
+        width = count * 100 / total if total > 0 else 0
+        segments += (
+            f'<div class="gk-tri-seg gk-tri-{key}" style="width:{width:.2f}%" '
+            f'title="{esc(title)}" aria-label="{esc(label)}: {esc(title)}"></div>'
+        )
+    return f'<div class="gk-tri-bar">{segments}</div>'
+
+
+def _triage_card_html(key: str, label: str, count: int, line: str, total: int) -> str:
+    return (
+        f'<div class="gk-tri-card gk-tri-card-{key}">'
+        f'<div class="gk-tri-figures"><b class="gk-tri-count">{int(count)}</b>'
+        f'<span class="gk-tri-percent">{_percent(count, total)}%</span></div>'
+        f'<b class="gk-tri-label">{esc(label)}</b>'
+        f'<p class="gk-tri-line">{esc(line)}</p>'
+        "</div>"
+    )
+
+
 def funnel_html(funnel: dict[str, int]) -> str:
-    """Funnel from all requests down to the few that reach the analyst."""
-    steps = "".join([
-        _funnel_step_html(funnel["requests"], "requests checked"),
-        _funnel_step_html(funnel["passed"], "passed silently"),
-        _funnel_step_html(funnel["flagged"], "flagged, watched"),
-        _funnel_step_html(funnel["incidents"], "incidents", f"{funnel['in_incidents']} requests"),
-        _funnel_step_html(funnel["analyzed"], "analyzed", f"{funnel['analyzed_llm']} by LLM"),
-    ])
+    """Triage panel: three parallel buckets of requests, then how many incidents got analyzed."""
+    total = funnel["requests"]
+    buckets = _triage_buckets(funnel)
+    cards = "".join(_triage_card_html(key, label, count, line, total) for key, label, count, line in buckets)
+    incidents = funnel["incidents"]
+    analyzed = funnel["analyzed"]
+    by_llm = funnel["analyzed_llm"]
+    by_rules = max(analyzed - by_llm, 0)
+    flow = (
+        f"{incidents} {_plural(incidents, 'incident', 'incidents')} opened → {analyzed} analyzed "
+        f"({by_llm} by the AI analyst, {by_rules} by fixed rules)"
+    )
     return (
         '<section class="gk-section gk-triage">'
-        "<h2>Traffic triage</h2>"
-        f'<ol class="gk-funnel">{steps}</ol>'
-        '<p class="gk-triage-note">Every request gets a cheap baseline check. Only incidents go to the analyst.</p>'
+        f'<div class="gk-tri-head"><h2>Traffic triage</h2><span class="gk-tri-total">{total} requests checked</span></div>'
+        f"{_triage_bar_html(buckets, total)}"
+        f'<div class="gk-tri-cards">{cards}</div>'
+        f'<p class="gk-triage-note">{esc(flow)}<br>'
+        "Every request is checked against its token's baseline. Only incidents go to the analyst.</p>"
         "</section>"
     )
 

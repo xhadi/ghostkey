@@ -16,6 +16,7 @@ docker compose up -d --force-recreate gateway   # only if the gateway was alread
 `setup.sh` is safe to run again. It keeps existing users, repos, packages and tokens.
 It writes: `.env` (only the 3 DECOY_* lines), `contracts/credentials.json` (hash of REAL-CI-01),
 `attacker/loot/payments-api.env` (the "leaked" copy of the planted `.env`),
+`attacker/loot/docs-deploy.md` (the "leaked" copy of the `dev/docs` deploy runbook with BAIT-DOC-04),
 and `attacker/.secrets/real-ci-01.token` (gitignored).
 
 ## Run the scenarios
@@ -24,6 +25,10 @@ and `attacker/.secrets/real-ci-01.token` (gitignored).
 docker compose exec ci-runner bash /work/normal.sh      # normal traffic, no incident
 docker compose exec attacker  bash /work/scenario1.sh   # leaked bait
 docker compose exec attacker2 bash /work/scenario2.sh   # stolen real credential
+docker compose exec attacker3 bash /work/scenario3.sh   # leaked publish script (BAIT-PUB-03)
+docker compose exec attacker4 bash /work/scenario4.sh   # scanner with BAIT-DOC-04, read-only
+docker compose exec dev-laptop bash /work/noise.sh      # anonymous and mistyped requests, no incident
+bash attacker/run_all.sh                                # all of the above in order
 bash env/reset_packages.sh                              # before running a scenario again
 ```
 
@@ -35,7 +40,7 @@ Old incidents stay in the dashboard until you clear the DB (stop gateway/core/br
 
 | What | Where |
 |---|---|
-| Real Gitea: org `dev` (`payments-api` has the planted `.env` with BAIT-SRC-01) | `gitea-real`, user `dev-lead` |
+| Real Gitea: org `dev` (`payments-api` has the planted `.env` with BAIT-SRC-01, `docs` has `runbooks/deploy.md` with BAIT-DOC-04) | `gitea-real`, user `dev-lead` |
 | Decoy Gitea: `ops/ci-pipeline` (`.npmrc` has BAIT-CI-02), `ops/release-tools` (`scripts/publish.sh` has BAIT-PUB-03) | `gitea-decoy`, user `ci-mirror` (= `DECOY_GIT_USER`) |
 | Real Verdaccio: `ci-bot` (token = REAL-CI-01), `release-bot` | `verdaccio-real` |
 | Decoy Verdaccio: `registry-mirror` (token = `DECOY_NPM_TOKEN`) | `verdaccio-decoy` |
