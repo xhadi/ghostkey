@@ -9,7 +9,7 @@ Rules for this file:
 from __future__ import annotations
 
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from common import db
 
@@ -455,9 +455,6 @@ def event_log_html(events: list[dict]) -> str:
 
 # ---------------------------------------------------------------- traffic triage
 
-MAX_TRIAGE_SESSIONS = 6
-
-
 def session_verdict(session: dict) -> tuple[str, str]:
     """(css key, label) for one session row from queries.list_sessions()."""
     if session["incident_id"]:
@@ -475,10 +472,12 @@ def _funnel_step_html(count: int, label: str, note: str = "") -> str:
     return f'<li><b class="gk-step-count">{int(count)}</b><span class="gk-step-label">{esc(label)}</span>{small}</li>'
 
 
-def triage_html(funnel: dict[str, int], sessions: list[dict]) -> str:
-    """Funnel from all requests down to the few that reach the analyst, plus a table of sessions."""
-    if funnel["requests"] == 0:
-        return '<section class="gk-section gk-triage"><h2>Traffic triage</h2><p class="gk-quiet">No traffic yet</p></section>'
+def no_traffic_html() -> str:
+    return '<section class="gk-section gk-triage"><h2>Traffic triage</h2><p class="gk-quiet">No traffic yet</p></section>'
+
+
+def funnel_html(funnel: dict[str, int]) -> str:
+    """Funnel from all requests down to the few that reach the analyst."""
     steps = "".join([
         _funnel_step_html(funnel["requests"], "requests checked"),
         _funnel_step_html(funnel["passed"], "passed silently"),
@@ -486,25 +485,159 @@ def triage_html(funnel: dict[str, int], sessions: list[dict]) -> str:
         _funnel_step_html(funnel["incidents"], "incidents", f"{funnel['in_incidents']} requests"),
         _funnel_step_html(funnel["analyzed"], "analyzed", f"{funnel['analyzed_llm']} by LLM"),
     ])
-    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Points", "Verdict"))
-    rows = ""
-    for session in sessions[:MAX_TRIAGE_SESSIONS]:
-        key, label = session_verdict(session)
-        rows += (
-            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
-            f"<td>{int(session['requests'])}</td><td>{int(session['points'])}</td>"
-            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
-        )
-    more = len(sessions) - MAX_TRIAGE_SESSIONS
-    more_line = f'<p class="gk-quiet">+{more} more sessions</p>' if more > 0 else ""
     return (
         '<section class="gk-section gk-triage">'
         "<h2>Traffic triage</h2>"
         f'<ol class="gk-funnel">{steps}</ol>'
         '<p class="gk-triage-note">Every request gets a cheap baseline check. Only incidents go to the analyst.</p>'
-        '<div class="gk-table-scroll"><table class="gk-table">'
+        "</section>"
+    )
+
+
+def sessions_html(sessions: list[dict]) -> str:
+    """Every session as a row (incidents first, see queries.list_sessions), in a scroll box."""
+    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Points", "Last seen", "Verdict"))
+    rows = ""
+    for session in sessions:
+        key, label = session_verdict(session)
+        rows += (
+            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
+            f"<td>{int(session['requests'])}</td><td>{int(session['points'])}</td>"
+            f"<td>{esc(fmt_time(session['last_ts']))}</td>"
+            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
+        )
+    return (
+        '<section class="gk-section">'
+        f'<h2>Sessions <span class="gk-count">{len(sessions)}</span></h2>'
+        '<div class="gk-table-scroll gk-scroll-y"><table class="gk-table gk-sessions">'
         f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
-        f"{more_line}"
+        "</section>"
+    )
+
+
+# ---------------------------------------------------------------- activity strip
+
+PLANES = ("real", "decoy", "blocked")
+PLANE_NAMES = {"real": "Real", "decoy": "Decoy", "blocked": "Blocked"}
+
+
+def _activity_buckets(events: list[dict], now: datetime, minutes: int) -> list[dict[str, int]]:
+    """One {plane: count} dict per minute, oldest first. The last bucket is the minute `now` is in."""
+    first_minute = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes - 1)
+    buckets: list[dict[str, int]] = [{plane: 0 for plane in PLANES} for _ in range(minutes)]
+    for event in events:
+        stamp = db.parse_iso(event["ts"]).replace(second=0, microsecond=0)
+        offset = int((stamp - first_minute).total_seconds() // 60)
+        if 0 <= offset < minutes and event["routed_to"] in PLANES:
+            buckets[offset][event["routed_to"]] += 1
+    return buckets
+
+
+def activity_html(events: list[dict], now: datetime | None = None, minutes: int = 30) -> str:
+    """Events per minute for the last `minutes` minutes, each bar split by routed_to (pure HTML and CSS)."""
+    now = now or datetime.now(timezone.utc)
+    buckets = _activity_buckets(events, now, minutes)
+    tallest = max(sum(b.values()) for b in buckets)
+    first_minute = now.replace(second=0, microsecond=0) - timedelta(minutes=minutes - 1)
+    bars = ""
+    for index, bucket in enumerate(buckets):
+        total = sum(bucket.values())
+        clock = (first_minute + timedelta(minutes=index)).strftime("%H:%M")
+        detail = ", ".join(f"{bucket[p]} {p}" for p in PLANES if bucket[p])
+        title = f"{clock} UTC: {total} events" + (f" ({detail})" if detail else "")
+        stack = ""
+        if total:
+            segments = "".join(
+                f'<i class="gk-seg gk-seg-{plane}" style="flex:{bucket[plane]}"></i>'
+                for plane in PLANES if bucket[plane]
+            )
+            stack = f'<span class="gk-stack" style="height:{round(100 * total / tallest)}%">{segments}</span>'
+        bars += f'<li title="{esc(title)}">{stack}</li>'
+    legend = "".join(
+        f'<li><i class="gk-seg gk-seg-{plane}"></i>{PLANE_NAMES[plane]} <b>{sum(b[plane] for b in buckets)}</b></li>'
+        for plane in PLANES
+    )
+    return (
+        '<section class="gk-section gk-activity">'
+        f"<h2>Activity, last {int(minutes)} minutes</h2>"
+        f'<ol class="gk-bars">{bars}</ol>'
+        f'<p class="gk-axis"><span>{esc(first_minute.strftime("%H:%M"))} UTC</span><span>now</span></p>'
+        f'<ul class="gk-legend-row">{legend}</ul>'
+        "</section>"
+    )
+
+
+# ---------------------------------------------------------------- all events table
+
+ALL_EVENTS_HEADINGS = (
+    "Time", "Source IP", "Token", "Kind", "Service", "Stage", "Action", "Target",
+    "Result", "Routed", "Points", "Incident", "Path", "User agent",
+)
+SHOWN_EVENT_LIMIT = 200
+
+
+def _clipped(value: object, cls: str = "") -> str:
+    """Cell text cut with a CSS ellipsis; the full value stays in the title attribute."""
+    return f'<td class="{cls}"><span class="gk-clip" title="{esc(value)}">{esc(value)}</span></td>'
+
+
+def _event_row_html(event: dict) -> str:
+    """One row of the all-events table. Row colour: incident = alarm, flagged without incident = amber."""
+    points = int(event["points"])
+    row_class = ""
+    if event["incident_id"]:
+        row_class = ' class="gk-ev-incident"'
+    elif points > 0:
+        row_class = ' class="gk-ev-flagged"'
+    result = f'{event["result"] or ""} {event["status_code"] or ""}'.strip()
+    routed = event["routed_to"]
+    cells = "".join(f"<td>{esc(c)}</td>" for c in (
+        _clock(event["ts"]),
+        event["source_ip"],
+        event["bait_id"] or event["credential_id"] or "",
+        event["token_kind"],
+        event["service"],
+        event["stage"],
+        event["action"],
+    ))
+    return (
+        f"<tr{row_class}>{cells}"
+        f'{_clipped(event["target"])}'
+        f"<td>{esc(result)}</td>"
+        f'<td><span class="gk-pill gk-routed-{esc(routed)}">{esc(routed)}</span></td>'
+        f"<td>{points or ''}</td>"
+        f'<td>{esc(event["incident_id"])}</td>'
+        f'{_clipped(event["path"], "gk-path")}'
+        f'{_clipped(event["user_agent"])}'
+        "</tr>"
+    )
+
+
+def all_events_html(events: list[dict], total: int, shown_limit: int = SHOWN_EVENT_LIMIT,
+                    fetched: int | None = None) -> str:
+    """The all-events table.
+
+    events = the rows that passed the filters (newest first), total = all events in the DB,
+    fetched = how many of the newest events were loaded before filtering (defaults to total).
+    At most shown_limit rows are drawn, to keep the page light.
+    """
+    fetched = total if fetched is None else fetched
+    matched = len(events)
+    shown = min(matched, shown_limit)
+    note = f"Showing {shown} of {matched} events"
+    if matched > shown:
+        note += ". Use the filters to narrow the list"
+    if fetched < total:
+        note += f". Only the newest {fetched} of {total} events are loaded"
+    head = f'<h2>All events <span class="gk-count">{total}</span></h2><p class="gk-quiet gk-showing">{esc(note)}</p>'
+    if not events:
+        return f'<section class="gk-section">{head}<p class="gk-quiet gk-empty-line">No events match these filters</p></section>'
+    header = "".join(f"<th>{esc(h)}</th>" for h in ALL_EVENTS_HEADINGS)
+    rows = "".join(_event_row_html(e) for e in events[:shown])
+    return (
+        f'<section class="gk-section">{head}'
+        '<div class="gk-table-scroll gk-scroll-y"><table class="gk-table gk-events">'
+        f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
         "</section>"
     )
 

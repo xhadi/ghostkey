@@ -18,6 +18,26 @@ from dashboard import queries, theme, views  # noqa: E402
 
 DEFAULT_REVIEWER = "analyst"
 
+# Static labels: changing a radio's labels would reset its state.
+VIEW_INCIDENTS = "Incidents"
+VIEW_TRAFFIC = "All traffic"
+VIEWS = (VIEW_INCIDENTS, VIEW_TRAFFIC)
+VIEW_PARAMS = {"incidents": VIEW_INCIDENTS, "traffic": VIEW_TRAFFIC}
+
+ROUTED_OPTIONS = ("real", "decoy", "blocked")
+TOKEN_KIND_OPTIONS = ("bait", "real", "unknown", "none")
+SERVICE_OPTIONS = ("git", "npm")
+STAGE_OPTIONS = ("source", "build", "publish", "unknown")
+FILTER_KEYS = ("f_routed", "f_kind", "f_service", "f_stage", "f_linked", "f_search")
+
+
+def keep_filters() -> None:
+    """Streamlit drops the state of widgets that are not drawn, so the filters would reset while
+    the Incidents view is open. Writing each value back to itself keeps it."""
+    for key in FILTER_KEYS:
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
+
 
 def pick_incident(incident_id: str) -> None:
     """Button callback: the user chose an incident, so stop auto-following the newest."""
@@ -32,6 +52,16 @@ def decide(action_id: int, decision: str) -> None:
         queries.decide_action(conn, action_id, decision, reviewer)
     finally:
         conn.close()
+
+
+def apply_view_param() -> None:
+    """On the first run, ?view=traffic opens the All traffic tab (handy for screenshots)."""
+    if st.session_state.get("view_param_applied"):
+        return
+    st.session_state["view_param_applied"] = True
+    wanted = VIEW_PARAMS.get(st.query_params.get("view", ""))
+    if wanted:
+        st.session_state["view"] = wanted
 
 
 def apply_query_param(incidents: list[dict]) -> None:
@@ -128,31 +158,72 @@ def render_detail(conn, incident: dict, contracts: dict, sessions: list[dict]) -
         st.markdown(views.event_log_html(events), unsafe_allow_html=True)
 
 
+def render_incidents(conn, contracts: dict) -> None:
+    """The Incidents view: the rail on the left, the selected incident on the right."""
+    incidents = queries.list_incidents(conn)
+    if not incidents:
+        st.markdown(views.empty_state_html(), unsafe_allow_html=True)
+        return
+    apply_query_param(incidents)
+    selected = selected_incident(incidents)
+    sessions = queries.list_sessions(conn)
+    with st.container(key="main"):
+        rail_col, detail_col = st.columns([1, 3.2])
+        with rail_col:
+            render_rail(incidents, selected["incident_id"], queries.pending_approval_counts(conn))
+        with detail_col:
+            render_detail(conn, selected, contracts, sessions)
+
+
+def render_filters() -> dict:
+    """The filter row above the all-events table. Returns the filters dict for queries.filter_events."""
+    with st.container(key="filters"):
+        cols = st.columns([1, 1, 1, 1, 1.2, 2])
+        return {
+            "routed_to": cols[0].multiselect("Routed to", ROUTED_OPTIONS, key="f_routed"),
+            "token_kind": cols[1].multiselect("Token kind", TOKEN_KIND_OPTIONS, key="f_kind"),
+            "service": cols[2].multiselect("Service", SERVICE_OPTIONS, key="f_service"),
+            "stage": cols[3].multiselect("Stage", STAGE_OPTIONS, key="f_stage"),
+            "linked": cols[4].selectbox("Linked", queries.LINKED_OPTIONS, key="f_linked"),
+            "search": cols[5].text_input("Search", key="f_search", placeholder="IP, token, target, path, agent, incident"),
+        }
+
+
+def render_traffic(conn, total_events: int) -> None:
+    """The All traffic view: funnel, activity, sessions, then every event with filters."""
+    with st.container(key="traffic"):
+        funnel = queries.triage_funnel(conn)
+        if funnel["requests"] == 0:
+            st.markdown(views.no_traffic_html(), unsafe_allow_html=True)
+            return
+        events = queries.list_all_events(conn)
+        st.markdown(views.funnel_html(funnel), unsafe_allow_html=True)
+        st.markdown(views.activity_html(events), unsafe_allow_html=True)
+        st.markdown(views.sessions_html(queries.list_sessions(conn)), unsafe_allow_html=True)
+        st.markdown('<section class="gk-section gk-filters-head"><h2>Filter events</h2></section>', unsafe_allow_html=True)
+        filters = render_filters()
+        matched = queries.filter_events(events, filters)
+        st.markdown(
+            views.all_events_html(matched, total_events, fetched=len(events)),
+            unsafe_allow_html=True,
+        )
+
+
 @st.fragment(run_every=2)
 def live() -> None:
-    """The part of the page that refreshes every 2 seconds."""
+    """The part of the page that refreshes every 2 seconds. Only the chosen view is queried and drawn."""
     contracts = {"baselines": db.load_json("baselines.json"), "credentials": db.load_json("credentials.json")}
     conn = queries.open_db()
     try:
         counts = queries.traffic_counts(conn)
-        incidents = queries.list_incidents(conn)
         st.markdown(views.header_html(counts, theme.mark_data_uri()), unsafe_allow_html=True)
-        # Always visible, also with zero incidents: normal traffic must show as "passed silently".
-        with st.container(key="triage"):
-            funnel = queries.triage_funnel(conn)
-            sessions = queries.list_sessions(conn)
-            st.markdown(views.triage_html(funnel, sessions), unsafe_allow_html=True)
-        if not incidents:
-            st.markdown(views.empty_state_html(), unsafe_allow_html=True)
-            return
-        apply_query_param(incidents)
-        selected = selected_incident(incidents)
-        with st.container(key="main"):
-            rail_col, detail_col = st.columns([1, 3.2])
-            with rail_col:
-                render_rail(incidents, selected["incident_id"], queries.pending_approval_counts(conn))
-            with detail_col:
-                render_detail(conn, selected, contracts, sessions)
+        apply_view_param()
+        keep_filters()
+        view = st.radio("View", VIEWS, horizontal=True, key="view", label_visibility="collapsed")
+        if view == VIEW_TRAFFIC:
+            render_traffic(conn, counts["events"])
+        else:
+            render_incidents(conn, contracts)
     finally:
         conn.close()
 
