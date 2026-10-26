@@ -13,6 +13,12 @@ SCHEMA_PATH = ROOT / "contracts" / "schema.sql"
 
 TABLES = ("actions", "analyses", "signals", "incidents", "events")
 
+# Columns added to `actions` after the first release. Older DBs get them via ALTER TABLE.
+ACTION_COLUMNS_ADDED_LATER = (
+    ("scope_ip", "TEXT"),
+    ("mode", "TEXT CHECK (mode IN ('block','divert'))"),
+)
+
 
 def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open the DB with WAL and a busy timeout so several processes can share it."""
@@ -26,9 +32,24 @@ def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
 
 
 def init(conn: sqlite3.Connection) -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, and add newer columns to older tables."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _add_missing_action_columns(conn)
     conn.commit()
+
+
+def _add_missing_action_columns(conn: sqlite3.Connection) -> None:
+    """Add actions.scope_ip / actions.mode to a DB created before they existed."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(actions)")}
+    for name, definition in ACTION_COLUMNS_ADDED_LATER:
+        if name in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
+        except sqlite3.OperationalError as exc:
+            # Several containers call init() at startup; another one may have won the race.
+            if "duplicate column" not in str(exc).lower():
+                raise
 
 
 def reset(conn: sqlite3.Connection) -> None:

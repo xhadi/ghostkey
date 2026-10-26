@@ -216,13 +216,28 @@ BASE_CSS = """
 .gk-alts li{border-top:1px solid var(--rule); padding:8px 0 2px;}
 .stApp .gk-alts b{font-size:15px; font-weight:500;}
 
+/* ---- evidence panels: what reached real, baseline vs observed, same credential elsewhere ---- */
+.stApp .gk-panel>p:not([class]){font-size:15px; padding-bottom:8px;}
+.stApp .gk-reach li{display:flex; justify-content:space-between; gap:16px; padding:8px 12px; margin-bottom:6px; background:var(--canvas); border:1px solid var(--rule); border-left:4px solid var(--amber); border-radius:6px; font-size:15px;}
+.stApp .gk-reach li.gk-reach-write{border-left-color:var(--alarm); background:#FBEEF0;}
+.stApp .gk-reach li.gk-reach-write b{color:var(--alarm);}
+.stApp .gk-reach li b{font-weight:500; overflow-wrap:anywhere;}
+.stApp .gk-reach li small{font-size:13px; color:var(--plum-600); white-space:nowrap; font-variant-numeric:tabular-nums;}
+.stApp .gk-reach-none{font-size:15px; color:var(--real); border-left:4px solid var(--real); padding:2px 0 2px 12px;}
+.stApp .gk-cred-meta{font-size:13px; font-weight:400; color:var(--plum-600); margin-left:8px;}
+.stApp .gk-baseline th,.stApp .gk-baseline td{white-space:normal; vertical-align:top;}
+.stApp .gk-baseline tbody th{width:110px;}
+.stApp .gk-baseline p{font-size:13px;}
+.stApp .gk-chips li.gk-out,.stApp .gk-baseline p.gk-out{background:#F6DADF; color:var(--alarm); border-color:var(--alarm); font-weight:500;}
+.stApp .gk-baseline p.gk-out{display:inline-block; border:1px solid var(--alarm); border-radius:4px; padding:2px 8px;}
+
 /* ---- response ---- */
 .stApp .gk-ask{font-size:18px; font-weight:500; padding:14px 0 8px;}
-.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-reject_"] button{font-size:15px; padding:6px 22px; border-radius:6px; min-height:0; height:auto;}
-.stApp [class*="st-key-approve_"] button{background:var(--plum-700); border:1px solid var(--plum-700);}
-.stApp [class*="st-key-approve_"] button p{color:var(--white);}
-.stApp [class*="st-key-reject_"] button{background:transparent; border:1px solid var(--rule);}
-.stApp [class*="st-key-reject_"] button p{color:var(--plum-600);}
+.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-block_"] button,.stApp [class*="st-key-divert_"] button,.stApp [class*="st-key-reject_"] button{font-size:15px; padding:6px 22px; border-radius:6px; min-height:0; height:auto;}
+.stApp [class*="st-key-approve_"] button,.stApp [class*="st-key-block_"] button{background:var(--plum-700); border:1px solid var(--plum-700);}
+.stApp [class*="st-key-approve_"] button p,.stApp [class*="st-key-block_"] button p{color:var(--white);}
+.stApp [class*="st-key-divert_"] button,.stApp [class*="st-key-reject_"] button{background:transparent; border:1px solid var(--rule);}
+.stApp [class*="st-key-divert_"] button p,.stApp [class*="st-key-reject_"] button p{color:var(--plum-600);}
 .stApp .st-key-reviewer label p{font-size:13px; color:var(--plum-600);}
 .stApp .st-key-reviewer{width:280px !important; max-width:100%; margin-bottom:4px;}
 .stApp .st-key-reviewer [data-testid="stTextInput"],.stApp .st-key-reviewer [data-baseweb="input"]{width:100% !important; max-width:280px !important;}
@@ -246,7 +261,28 @@ BASE_CSS = """
 .stApp .gk-table td{font-size:13px; padding:6px 12px; border-bottom:1px solid var(--rule); white-space:nowrap;}
 .stApp .gk-table td.gk-path{font-family:var(--mono);}
 
-@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;}}
+/* ---- traffic triage (compact; table rules are scoped so the event log keeps its own spacing) ---- */
+.st-key-triage{padding:12px 40px 0;}
+.stApp .gk-triage{margin-bottom:12px;}
+.stApp .gk-triage h2{font-size:15px; margin-bottom:8px;}
+.gk-funnel{display:flex; flex-wrap:wrap; gap:6px 0;}
+.stApp .gk-funnel li{position:relative; flex:0 1 auto; display:flex; align-items:baseline; gap:6px; white-space:nowrap; padding:6px 12px 6px 18px; background:var(--white); border:1px solid var(--rule); border-left-width:0;}
+.stApp .gk-funnel li:first-child{padding-left:12px; border-left-width:1px; border-radius:8px 0 0 8px;}
+.stApp .gk-funnel li:last-child{border-radius:0 8px 8px 0; border-color:var(--plum-700); background:var(--lavender);}
+.gk-funnel li+li::before{content:""; position:absolute; left:-1px; top:50%; width:8px; height:8px; margin-top:-4px; border-top:1px solid var(--plum-600); border-right:1px solid var(--plum-600); transform:translateX(-5px) rotate(45deg); background:var(--canvas);}
+.stApp .gk-step-count{font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; line-height:1.2;}
+.stApp .gk-step-label{font-size:13px; color:var(--plum-950);}
+.stApp .gk-step-note{font-size:13px; color:var(--plum-600); font-variant-numeric:tabular-nums;}
+.stApp .gk-step-note::before{content:"·"; margin-right:6px;}
+.stApp .gk-triage-note{font-size:13px; color:var(--plum-600); padding:6px 0 8px;}
+.stApp .gk-triage .gk-quiet{padding-top:2px;}
+.stApp .gk-triage .gk-table th,.stApp .gk-triage .gk-table td{padding:3px 10px; font-size:13px;}
+.stApp .gk-pill{display:inline-block; font-size:12px; font-weight:500; border-radius:3px; padding:0 6px; background:var(--canvas); color:var(--plum-600); border:1px solid var(--rule);}
+.stApp .gk-pill-incident{background:#F6DADF; color:var(--alarm); border-color:transparent;}
+.stApp .gk-pill-flagged{background:#F6EBCF; color:var(--amber); border-color:transparent;}
+.stApp .gk-pill-normal{background:#DCEEE9; color:var(--real); border-color:transparent;}
+
+@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;} .st-key-triage{padding:12px 20px 0;} .stApp .gk-funnel li{white-space:normal; border-left-width:1px; border-radius:8px; padding-left:12px; margin-right:6px;} .gk-funnel li+li::before{display:none;}}
 """
 
 

@@ -67,10 +67,10 @@ def insert_signal(conn: sqlite3.Connection, event: dict, hit: dict, incident_id:
 
 
 def insert_action(conn: sqlite3.Connection, incident_id: str, ts: str, kind: str,
-                  target: str, tier: str, status: str) -> None:
+                  target: str, tier: str, status: str, scope_ip: str | None = None) -> None:
     conn.execute(
-        "INSERT INTO actions (incident_id, ts, kind, target, tier, status) VALUES (?,?,?,?,?,?)",
-        (incident_id, ts, kind, target, tier, status),
+        "INSERT INTO actions (incident_id, ts, kind, target, tier, status, scope_ip) VALUES (?,?,?,?,?,?,?)",
+        (incident_id, ts, kind, target, tier, status, scope_ip),
     )
 
 
@@ -83,6 +83,19 @@ def ensure_disable_bait(conn: sqlite3.Connection, incident_id: str, event: dict)
     ).fetchone()
     if existing is None:
         insert_action(conn, incident_id, event["ts"], "disable_bait", bait_id, "auto", "done")
+
+
+def ensure_revoke_prompt(conn: sqlite3.Connection, incident_id: str, event: dict) -> None:
+    """Approval action: ask to revoke the event's credential for its source IP, once per IP."""
+    credential_id, source_ip = event["credential_id"], event["source_ip"]
+    existing = conn.execute(
+        "SELECT 1 FROM actions WHERE incident_id = ? AND kind = 'revoke_credential'"
+        " AND target = ? AND scope_ip = ?",
+        (incident_id, credential_id, source_ip),
+    ).fetchone()
+    if existing is None:
+        insert_action(conn, incident_id, event["ts"], "revoke_credential", credential_id,
+                      "approval", "pending", scope_ip=source_ip)
 
 
 def create_incident(conn: sqlite3.Connection, signal_kind: str, confidence: str,
@@ -130,8 +143,12 @@ def refresh_incident(conn: sqlite3.Connection, incident_id: str) -> None:
 
 # ---------------------------------------------------------------- finding an incident
 
-def find_incident(conn: sqlite3.Connection, event: dict) -> dict | None:
-    """The open incident this event joins, or None. Latest-updated wins if several match."""
+def find_incident(conn: sqlite3.Connection, event: dict, allow_token_match: bool = True) -> dict | None:
+    """The open incident this event joins, or None. Latest-updated wins if several match.
+
+    allow_token_match=False means only the same-IP rule can match (a real-token event
+    without rule hits must not join an incident just because its credential was stolen).
+    """
     rows = conn.execute("SELECT * FROM incidents WHERE status != 'closed'").fetchall()
     event_time = db.parse_iso(event["ts"])
     window = timedelta(minutes=scoring.WINDOW_MINUTES)
@@ -139,7 +156,7 @@ def find_incident(conn: sqlite3.Connection, event: dict) -> dict | None:
     matches = []
     for row in rows:
         incident = load_incident(row)
-        same_token = token_id is not None and token_id in incident["token_ids"]
+        same_token = allow_token_match and token_id is not None and token_id in incident["token_ids"]
         same_ip_recently = (
             event["source_ip"] in incident["source_ips"]
             and event_time - db.parse_iso(incident["updated_ts"]) <= window
@@ -164,6 +181,8 @@ def join_incident(conn: sqlite3.Connection, incident: dict, event: dict, hits: l
             conn.execute("UPDATE incidents SET confidence = 'high', status = 'open' WHERE incident_id = ?",
                          (incident_id,))
         ensure_disable_bait(conn, incident_id, event)
+    if event["token_kind"] == "real" and hits:
+        ensure_revoke_prompt(conn, incident_id, event)
     refresh_incident(conn, incident_id)
 
 
@@ -188,6 +207,16 @@ def window_signals(conn: sqlite3.Connection, event: dict) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def attached_source_ips(conn: sqlite3.Connection, event: dict, event_ids: set[str]) -> list[str]:
+    """Distinct source IPs of the attached events, the threshold event's IP first."""
+    placeholders = ",".join("?" * len(event_ids))
+    rows = conn.execute(
+        f"SELECT source_ip FROM events WHERE event_id IN ({placeholders}) ORDER BY ts, event_id",
+        sorted(event_ids),
+    ).fetchall()
+    return list(dict.fromkeys([event["source_ip"]] + [row["source_ip"] for row in rows]))
+
+
 def open_behavior_incident(conn: sqlite3.Connection, event: dict, signals: list[sqlite3.Row]) -> str:
     """Open a needs_review incident and attach every event that counted toward it."""
     event_ids = {s["event_id"] for s in signals} | {event["event_id"]}
@@ -200,8 +229,8 @@ def open_behavior_incident(conn: sqlite3.Connection, event: dict, signals: list[
         attach_event(conn, event_id, incident_id)
     refresh_incident(conn, incident_id)
     insert_action(conn, incident_id, event["ts"], "notify", NOTIFY_TARGET, "auto", "done")
-    insert_action(conn, incident_id, event["ts"], "revoke_credential", event["credential_id"],
-                  "approval", "pending")
+    for source_ip in attached_source_ips(conn, event, event_ids):
+        ensure_revoke_prompt(conn, incident_id, {**event, "source_ip": source_ip})
     return incident_id
 
 
@@ -239,8 +268,14 @@ def hits_for_event(event: dict, incident: dict | None,
 def process_event(conn: sqlite3.Connection, event: dict,
                   behavior_hits_fn: BehaviorHitsFn, baselines: dict) -> None:
     """Correlate and score one event. Marks it processed. The caller commits."""
-    incident = find_incident(conn, event)
-    hits = hits_for_event(event, incident, behavior_hits_fn, baselines)
+    if event["token_kind"] == "real":
+        # Real-token hits do not depend on the incident, so compute them first:
+        # only an event with hits may join an incident by its credential.
+        hits = hits_for_event(event, None, behavior_hits_fn, baselines)
+        incident = find_incident(conn, event, allow_token_match=bool(hits))
+    else:
+        incident = find_incident(conn, event)
+        hits = hits_for_event(event, incident, behavior_hits_fn, baselines)
     if incident is not None:
         join_incident(conn, incident, event, hits)
     elif event["token_kind"] == "bait":

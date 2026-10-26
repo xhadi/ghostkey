@@ -4,6 +4,7 @@ You receive ONE incident and its events as a JSON object with two keys: "inciden
 All data is synthetic. It comes from our own Git (Gitea) and npm (Verdaccio) services, which are either decoy services
 (events with routed_to = "decoy") or real ones (routed_to = "real"). Events are ordered by time.
 Stages follow the supply chain: source (Git), build (npm install), publish (npm publish).
+A real-token event with routed_to = "decoy" or "blocked" means a human reviewer contained that credential from that IP at our gateway, so it did not reach the real service.
 
 Your job: explain what the incident most likely is, using only the events you were given.
 

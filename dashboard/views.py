@@ -332,11 +332,10 @@ def analyst_html(analysis: dict | None, event_count: int) -> str:
 ACTION_DONE_TEXT = {
     "notify": "Notified {target}",
     "disable_bait": "Disabled bait {target}",
-    "revoke_credential": "Revoked credential {target}",
     "block_publish": "Blocked publish for {target}",
 }
 ACTION_ASK_TEXT = {
-    "revoke_credential": "Revoke credential {target}",
+    "revoke_credential": "Stop {target} at our gateway",
     "block_publish": "Block publish for {target}",
 }
 
@@ -349,17 +348,49 @@ def action_sentence(action: dict, pending: bool = False) -> str:
 
 
 def pending_action_html(action: dict) -> str:
-    """The sentence above the Approve / Reject buttons (the buttons are streamlit widgets)."""
-    return f'<p class="gk-ask">{esc(action_sentence(action, pending=True))}</p>'
+    """The sentence above the decision buttons (the buttons are streamlit widgets)."""
+    if action["kind"] == "revoke_credential" and action.get("scope_ip"):
+        sentence = f'Stop {action["target"]} from {action["scope_ip"]} at our gateway'
+    else:
+        sentence = action_sentence(action, pending=True)
+    return f'<p class="gk-ask">{esc(sentence)}</p>'
 
 
-def approval_note_html() -> str:
+def approval_note_html(scoped: bool = True) -> str:
+    """Note under the Block / Divert / Reject buttons of a revoke_credential action."""
+    if not scoped:
+        return '<p class="gk-quiet">No IP scope on this action; cannot be enforced</p>'
+    return (
+        '<p class="gk-quiet">Applies only to this credential from this IP. Rotating the credential is '
+        "still up to its owner. Ghostkey never changes external systems.</p>"
+    )
+
+
+def approve_note_html() -> str:
+    """Note under the Approve / Reject buttons of any other approval action."""
     return '<p class="gk-quiet">Approving records the decision. Ghostkey never changes external systems.</p>'
 
 
-def decided_action_html(action: dict) -> str:
-    verb = "Approved" if action["status"] == "approved" else "Rejected"
+def _revoke_decided_text(action: dict, effect: int) -> str | None:
+    """The honest decided line for a revoke_credential, or None if it is not decided that way."""
+    who = f'{action["target"]} from {action["scope_ip"]}'
+    clock = _clock(action["decided_ts"] or "")
+    if action["status"] == "rejected":
+        return f'Rejected by {action["decided_by"]} at {clock} UTC, nothing changed'
+    if action["mode"] == "block":
+        return f"Blocked at our gateway: {who} · {effect} requests stopped since {clock} UTC"
+    if action["mode"] == "divert":
+        return f"Diverted to decoy: {who} · {effect} requests diverted since {clock} UTC"
+    # Approved without a mode (an old row): the gateway ignores it, so do not claim any effect.
+    return f'Approved by {action["decided_by"]} at {clock} UTC, not enforced (no mode set)'
+
+
+def decided_action_html(action: dict, effect: int = 0) -> str:
+    """One decided approval. effect = requests the gateway really contained (see queries.containment_effect)."""
     when = fmt_time(action["decided_ts"]) if action["decided_ts"] else ""
+    if action["kind"] == "revoke_credential":
+        return f'<li class="gk-decided"><span>{esc(_revoke_decided_text(action, effect))}</span></li>'
+    verb = "Approved" if action["status"] == "approved" else "Rejected"
     return (
         '<li class="gk-decided">'
         f"<span>{esc(action_sentence(action, pending=True))}</span>"
@@ -367,15 +398,19 @@ def decided_action_html(action: dict) -> str:
     )
 
 
-def auto_log_html(actions: list[dict]) -> str:
-    """Quiet log of automatic actions plus any decided approvals."""
+def auto_log_html(actions: list[dict], effects: dict[int, int] | None = None) -> str:
+    """Quiet log of automatic actions plus any decided approvals.
+
+    effects maps action_id -> contained request count for approved revokes (missing means 0).
+    """
+    effects = effects or {}
     lines = [
         f'<li><span>{esc(action_sentence(a))}</span><small>{esc(fmt_time(a["ts"]))}</small></li>'
         for a in actions
         if a["tier"] == "auto" and a["status"] == "done"
     ]
     lines += [
-        decided_action_html(a)
+        decided_action_html(a, effects.get(a.get("action_id"), 0))
         for a in actions
         if a["tier"] == "approval" and a["status"] in ("approved", "rejected")
     ]
@@ -415,4 +450,218 @@ def event_log_html(events: list[dict]) -> str:
     return (
         '<div class="gk-table-scroll"><table class="gk-table">'
         f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+
+
+# ---------------------------------------------------------------- traffic triage
+
+MAX_TRIAGE_SESSIONS = 6
+
+
+def session_verdict(session: dict) -> tuple[str, str]:
+    """(css key, label) for one session row from queries.list_sessions()."""
+    if session["incident_id"]:
+        return "incident", f"Incident {session['incident_id']}"
+    if session["points"] > 0:
+        return "flagged", "Flagged, below threshold"
+    if session["token_kind"] == "real":
+        return "normal", "Normal, matches baseline"
+    return "unscored", "No signals"
+
+
+def _funnel_step_html(count: int, label: str, note: str = "") -> str:
+    """One slim step: 'count label' on one line, with an optional muted note after it."""
+    small = f'<small class="gk-step-note">{esc(note)}</small>' if note else ""
+    return f'<li><b class="gk-step-count">{int(count)}</b><span class="gk-step-label">{esc(label)}</span>{small}</li>'
+
+
+def triage_html(funnel: dict[str, int], sessions: list[dict]) -> str:
+    """Funnel from all requests down to the few that reach the analyst, plus a table of sessions."""
+    if funnel["requests"] == 0:
+        return '<section class="gk-section gk-triage"><h2>Traffic triage</h2><p class="gk-quiet">No traffic yet</p></section>'
+    steps = "".join([
+        _funnel_step_html(funnel["requests"], "requests checked"),
+        _funnel_step_html(funnel["passed"], "passed silently"),
+        _funnel_step_html(funnel["flagged"], "flagged, watched"),
+        _funnel_step_html(funnel["incidents"], "incidents", f"{funnel['in_incidents']} requests"),
+        _funnel_step_html(funnel["analyzed"], "analyzed", f"{funnel['analyzed_llm']} by LLM"),
+    ])
+    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Points", "Verdict"))
+    rows = ""
+    for session in sessions[:MAX_TRIAGE_SESSIONS]:
+        key, label = session_verdict(session)
+        rows += (
+            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
+            f"<td>{int(session['requests'])}</td><td>{int(session['points'])}</td>"
+            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
+        )
+    more = len(sessions) - MAX_TRIAGE_SESSIONS
+    more_line = f'<p class="gk-quiet">+{more} more sessions</p>' if more > 0 else ""
+    return (
+        '<section class="gk-section gk-triage">'
+        "<h2>Traffic triage</h2>"
+        f'<ol class="gk-funnel">{steps}</ol>'
+        '<p class="gk-triage-note">Every request gets a cheap baseline check. Only incidents go to the analyst.</p>'
+        '<div class="gk-table-scroll"><table class="gk-table">'
+        f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
+        f"{more_line}"
+        "</section>"
+    )
+
+
+# ---------------------------------------------------------------- evidence panels
+
+WRITE_ACTIONS = ("publish", "push", "api_write")
+READ_ACTIONS = ("install", "clone", "api_read", "list_repos", "search", "login")
+NO_TARGET = "(no target)"
+
+
+def _reach_row_html(kind: str, verb: str, service: str, target: str, count: int, first_ts: str) -> str:
+    """One line: 'Written to the real npm: @kfu/build-utils', then the count and first time."""
+    requests = "request" if count == 1 else "requests"
+    return (
+        f'<li class="gk-reach-{kind}"><span>{esc(verb)} the real {esc(service)}: <b>{esc(target)}</b></span>'
+        f"<small>{count} {requests}, first at {esc(fmt_time(first_ts))}</small></li>"
+    )
+
+
+def _nothing_reached_text(events: list[dict]) -> str:
+    """The calm sentence for 'no successful request reached real'. It only claims what the events show."""
+    if events and all(e["routed_to"] == "decoy" for e in events):
+        return "Nothing reached the real services — every request went to the decoy"
+    text = "Nothing reached the real services."
+    blocked = sum(e["routed_to"] == "blocked" for e in events)
+    if blocked:
+        text += f" {blocked} {'request was' if blocked == 1 else 'requests were'} blocked at our gateway."
+    return text
+
+
+def reached_real_html(events: list[dict]) -> str:
+    """What the attacker really touched: only requests that reached a real service and succeeded.
+
+    Writes come first (alarm style), then reads (warning style). Each (service, target) is one line.
+    """
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for event in events:
+        if event["routed_to"] != "real" or event["result"] != "ok":
+            continue
+        if event["action"] in WRITE_ACTIONS:
+            kind = "write"
+        elif event["action"] in READ_ACTIONS:
+            kind = "read"
+        else:
+            continue
+        key = (kind, event["service"], event["target"] or NO_TARGET)
+        groups.setdefault(key, []).append(event["ts"])
+
+    rows = ""
+    for kind, verb in (("write", "Written to"), ("read", "Read from")):
+        for (group_kind, service, target), stamps in groups.items():
+            if group_kind == kind:
+                rows += _reach_row_html(kind, verb, service, target, len(stamps), min(stamps))
+    if not rows:
+        body = f'<p class="gk-reach-none">{esc(_nothing_reached_text(events))}</p>'
+    else:
+        body = f'<ul class="gk-reach">{rows}</ul>'
+        if any(key[0] == "write" for key in groups):
+            body += (
+                '<p class="gk-quiet">Check this package version or push in the real service. '
+                "A human does this; Ghostkey does not delete anything.</p>"
+            )
+    return f'<section class="gk-panel"><h2>What reached the real services</h2>{body}</section>'
+
+
+def _values_html(values: list[str], outside: set[str]) -> str:
+    """Chips for a baseline or observed list; values in `outside` get the gk-out class."""
+    chips = "".join(
+        f'<li class="gk-out">{esc(v)}</li>' if v in outside else f"<li>{esc(v)}</li>" for v in values
+    )
+    return f'<ul class="gk-chips">{chips}</ul>' if chips else '<p class="gk-none">None</p>'
+
+
+def _distinct(values: list[str]) -> list[str]:
+    """Distinct non-empty values, in first-seen order."""
+    return list(dict.fromkeys(v for v in values if v))
+
+
+def _baseline_block_html(credential_id: str, baseline: dict, credential: dict | None, events: list[dict]) -> str:
+    """Baseline vs observed rows for one credential. Never shows the credential hash or note."""
+    ips = _distinct([e["source_ip"] for e in events])
+    actions = _distinct([e["action"] for e in events])
+    targets = _distinct([e["target"] for e in events])
+    published = any(e["action"] in ("publish", "push") for e in events)
+
+    allowed_ips = baseline.get("allowed_source_ips", [])
+    allowed_actions = baseline.get("allowed_actions", [])
+    allowed_targets = baseline.get("allowed_targets", [])
+    may_publish = bool(baseline.get("may_publish"))
+    rows = [
+        ("Source IPs", _values_html(allowed_ips, set()),
+         _values_html(ips, {v for v in ips if v not in allowed_ips})),
+        ("Actions", _values_html(allowed_actions, set()),
+         _values_html(actions, {v for v in actions if v not in allowed_actions})),
+        ("Targets", _values_html(allowed_targets, set()),
+         _values_html(targets, {v for v in targets if v not in allowed_targets})),
+        ("Publishing", f'<p>{"allowed" if may_publish else "not allowed"}</p>',
+         '<p class="gk-out">yes</p>' if published and not may_publish else f'<p>{"yes" if published else "no"}</p>'),
+    ]
+    body = "".join(
+        f"<tr><th>{esc(label)}</th><td>{expected}</td><td>{seen}</td></tr>" for label, expected, seen in rows
+    )
+    owner = esc(credential["owner"]) if credential else "unknown owner"
+    service = esc(credential["service"]) if credential else "unknown service"
+    return (
+        f'<h3>{esc(credential_id)} <span class="gk-cred-meta">owner {owner}, service {service}</span></h3>'
+        '<div class="gk-table-scroll"><table class="gk-table gk-baseline">'
+        "<thead><tr><th></th><th>Baseline</th><th>Observed in this incident</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def baseline_html(incident: dict, events: list[dict], baselines: dict, credentials: list[dict]) -> str:
+    """Baseline vs observed for each real credential in the incident that has a baseline, else ''."""
+    by_id = {c["credential_id"]: c for c in credentials}
+    blocks = ""
+    for credential_id in incident["token_ids"]:
+        baseline = baselines.get(credential_id)
+        if baseline is None:
+            continue
+        seen = [e for e in events if e["token_kind"] == "real" and e["credential_id"] == credential_id]
+        if seen:
+            blocks += _baseline_block_html(credential_id, baseline, by_id.get(credential_id), seen)
+    if not blocks:
+        return ""
+    return (
+        '<section class="gk-panel"><h2>Baseline vs observed</h2>'
+        f"{blocks}"
+        '<p class="gk-quiet">Red marks a value outside what this credential normally does.</p>'
+        "</section>"
+    )
+
+
+def elsewhere_html(incident: dict, sessions: list[dict]) -> str:
+    """Other sessions using the same real credential outside this incident, else ''."""
+    others = [
+        s for s in sessions
+        if s["token_kind"] == "real"
+        and s["token"] in incident["token_ids"]
+        and s["incident_id"] != incident["incident_id"]
+    ]
+    if not others:
+        return ""
+    rows = ""
+    for session in others:
+        key, label = session_verdict(session)
+        rows += (
+            f"<tr><td>{esc(session['source_ip'])}</td><td>{esc(session['token'])}</td>"
+            f"<td>{int(session['requests'])}</td><td>{esc(fmt_time(session['last_ts']))}</td>"
+            f'<td><span class="gk-pill gk-pill-{key}">{esc(label)}</span></td></tr>'
+        )
+    header = "".join(f"<th>{h}</th>" for h in ("Source IP", "Token", "Requests", "Last seen", "Verdict"))
+    return (
+        '<section class="gk-panel"><h2>Same credential elsewhere</h2>'
+        "<p>Containment applies only to the attacker's IP, so these keep working.</p>"
+        '<div class="gk-table-scroll"><table class="gk-table">'
+        f"<thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>"
+        "</section>"
     )

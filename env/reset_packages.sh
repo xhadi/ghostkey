@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Remove the versions the scenarios publish, so you can run them again:
-#   @kfu/build-utils@9.9.9 on the DECOY registry, @kfu/build-utils@9.9.10 on the REAL one.
+#   @kfu/build-utils@9.9.9 and (after a diverted scenario 2 re-run) @kfu/build-utils@9.9.10 on the DECOY registry,
+#   @kfu/build-utils@9.9.10 on the REAL one.
 # Goes straight to the registries (not through the gateway), so it logs no events.
 set -euo pipefail
 

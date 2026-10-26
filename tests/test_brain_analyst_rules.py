@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from brain.analyst_rules import rules_analysis
+from brain.analyst_rules import contained_count, rules_analysis
 from brain.validate import validate
 from tests.brain_support import BrainTestCase
 from tests.test_core import at, make_event
@@ -128,6 +128,59 @@ class FixtureScenarioTests(BrainTestCase):
         rules_analysis(incident, events)
         self.assertEqual(incident, incident_before)
         self.assertEqual(events, events_before)
+
+
+class ContainedTrafficTests(BrainTestCase):
+    """Requests a reviewer diverted or blocked at the gateway are counted and mentioned."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.load_fixtures("normal", "scenario1", "scenario2")
+        self.run_core()
+
+    def contained_scenario2(self) -> tuple[dict, list[dict]]:
+        """INC-002 plus two later real-token events that the gateway sent to the decoy."""
+        incident, events = self.incident("INC-002"), self.events_of("INC-002")
+        extra = [dict(events[-1], event_id=f"evt_c000000{n}", ts=at(30 + n), routed_to="decoy")
+                 for n in (1, 2)]
+        return incident, events + extra
+
+    def test_count_is_zero_for_both_fixture_scenarios(self) -> None:
+        for incident_id in ("INC-001", "INC-002"):
+            with self.subTest(incident=incident_id):
+                self.assertEqual(contained_count(self.events_of(incident_id)), 0)
+
+    def test_count_counts_real_token_events_sent_to_the_decoy_or_blocked(self) -> None:
+        _, events = self.contained_scenario2()
+        self.assertEqual(contained_count(events), 2)
+        events[-1]["routed_to"] = "blocked"
+        self.assertEqual(contained_count(events), 2)
+
+    def test_bait_events_never_count_as_contained(self) -> None:
+        # Scenario 1 is all routed_to=decoy, but those are bait events.
+        events = self.events_of("INC-001")
+        self.assertTrue(all(e["routed_to"] == "decoy" for e in events))
+        self.assertEqual(contained_count(events), 0)
+
+    def test_summary_without_contained_traffic_has_no_extra_sentence(self) -> None:
+        incident, events = self.incident("INC-002"), self.events_of("INC-002")
+        self.assertNotIn("قرار المراجع", rules_analysis(incident, events)["summary"])
+
+    def test_summary_with_contained_traffic_says_how_many_did_not_reach_real(self) -> None:
+        incident, events = self.contained_scenario2()
+        body = assert_valid(self, incident, events)
+        self.assertIn("بعد قرار المراجع", body["summary"])
+        self.assertIn("2", body["summary"])
+        self.assertIn("وما وصلت للخدمة الحقيقية", body["summary"])
+
+    def test_labels_observed_and_evidence_do_not_change(self) -> None:
+        incident, events = self.contained_scenario2()
+        before = rules_analysis(incident, events[:3])
+        after = assert_valid(self, incident, events)
+        self.assertEqual(after["hypothesis"], before["hypothesis"])
+        self.assertEqual(after["observed"], before["observed"])
+        self.assertEqual(after["alternatives"], before["alternatives"])
+        self.assertEqual(after["evidence_event_ids"], before["evidence_event_ids"])
 
 
 class HypothesisLabelTests(unittest.TestCase):

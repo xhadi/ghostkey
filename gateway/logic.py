@@ -174,6 +174,11 @@ def route_for(token_kind: str, service: str, env: dict) -> dict:
     """Where the request goes. A bait never reaches the real service: no decoy settings = blocked."""
     if token_kind != "bait":
         return {"routed_to": "real"}
+    return decoy_route(service, env)
+
+
+def decoy_route(service: str, env: dict) -> dict:
+    """Route to the decoy service with the decoy credential, or `blocked` when it is not configured."""
     settings = {
         "git": ("DECOY_GIT_URL", "DECOY_GIT_TOKEN", "token"),
         "npm": ("DECOY_NPM_URL", "DECOY_NPM_TOKEN", "Bearer"),
@@ -185,6 +190,18 @@ def route_for(token_kind: str, service: str, env: dict) -> dict:
     if not url or not token:
         return {"routed_to": "blocked"}
     return {"routed_to": "decoy", "upstream": url, "authorization": f"{scheme} {token}"}
+
+
+def containment_route(mode: str | None, service: str, env: dict) -> dict | None:
+    """Route override for a contained real credential. None = no containment, route as usual."""
+    if mode == "block":
+        return {"routed_to": "blocked", "status": 403, "body": b"forbidden"}
+    if mode == "divert":
+        route = decoy_route(service, env)
+        if route["routed_to"] == "blocked":
+            return {"routed_to": "blocked", "status": 503, "body": b"blocked"}
+        return route
+    return None
 
 
 def new_event_id() -> str:
