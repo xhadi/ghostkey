@@ -114,6 +114,18 @@ BASE_CSS = """
 .stApp .gk-empty p{font-size:15px; color:var(--plum-600); padding:10px 0 14px;}
 .stApp .gk-empty code{display:inline-block; font-family:var(--mono); font-size:13px; background:var(--white); border:1px solid var(--rule); border-radius:6px; padding:10px 14px; color:var(--plum-950);}
 
+/* ---- view tabs: a radio (key "view") dressed as a tab bar ---- */
+.stApp .st-key-view{background:var(--white); border-bottom:1px solid var(--rule); padding:0 40px;}
+.stApp .st-key-view [data-testid="stRadio"]>div{margin:0;}
+.stApp .st-key-view [role="radiogroup"]{gap:28px !important; margin:0;}
+.stApp .st-key-view label[data-baseweb="radio"]{margin:0; padding:14px 2px 11px; border-bottom:3px solid transparent; cursor:pointer; background:transparent;}
+.stApp .st-key-view label[data-baseweb="radio"]>:not(:has([data-testid="stMarkdownContainer"])){display:none !important;}
+.stApp .st-key-view label[data-baseweb="radio"]>div{margin:0; padding:0;}
+.stApp .st-key-view label[data-baseweb="radio"] p{font-size:15px; font-weight:500; color:var(--plum-600);}
+.stApp .st-key-view label[data-baseweb="radio"]:hover p{color:var(--plum-950);}
+.stApp .st-key-view label[data-baseweb="radio"]:has(input:checked){border-bottom-color:var(--plum-700);}
+.stApp .st-key-view label[data-baseweb="radio"]:has(input:checked) p{color:var(--plum-950);}
+
 /* ---- incident rail (st.button rows keyed inc_<id>) ---- */
 .stApp [class*="st-key-inc_"]{margin-bottom:10px;}
 .stApp [class*="st-key-inc_"] button{width:100%; display:block; text-align:left; height:auto; min-height:0; padding:10px 14px;
@@ -262,7 +274,58 @@ BASE_CSS = """
 .stApp .gk-table td.gk-path{font-family:var(--mono);}
 
 /* ---- traffic triage (compact; table rules are scoped so the event log keeps its own spacing) ---- */
-.st-key-triage{padding:12px 40px 0;}
+.st-key-traffic{padding:24px 40px 0;}
+.stApp .st-key-traffic,.stApp .st-key-view{box-sizing:border-box;}
+/* streamlit gives each child an inline pixel width; with side padding on the container they would overflow */
+.stApp .st-key-traffic>*,.stApp .st-key-view>*{width:100% !important; max-width:100% !important;}
+.stApp .st-key-traffic [data-testid="stMarkdown"],.stApp .st-key-traffic [data-testid="stMarkdownContainer"]{width:100% !important;}
+.stApp .st-key-traffic,.stApp .st-key-traffic>div,.stApp .st-key-traffic [data-testid="stElementContainer"],.stApp .st-key-traffic [data-testid="stMarkdownContainer"]{min-width:0; max-width:100%;}
+.stApp .gk-section h2 .gk-count{font-size:13px; font-weight:400; color:var(--plum-600); background:var(--white); border:1px solid var(--rule); border-radius:10px; padding:0 8px; margin-left:8px; vertical-align:middle; font-variant-numeric:tabular-nums;}
+.stApp .gk-section .gk-showing{padding-bottom:8px;}
+.stApp .gk-empty-line{padding:14px 0;}
+
+/* ---- all traffic: scroll boxes with a sticky header ---- */
+.gk-scroll-y{max-height:420px; overflow:auto; background:var(--white); border:1px solid var(--rule); border-radius:8px;}
+.stApp .gk-scroll-y .gk-table th{position:sticky; top:0; z-index:1; background:var(--white); box-shadow:0 1px 0 var(--rule);}
+.stApp .gk-scroll-y .gk-table tbody tr:last-child td{border-bottom:0;}
+.stApp .gk-events td,.stApp .gk-sessions td{padding:5px 10px;}
+.stApp .gk-events th,.stApp .gk-sessions th{padding:6px 10px;}
+.stApp .gk-events tbody tr{box-shadow:inset 3px 0 0 transparent;}
+.stApp .gk-events tbody tr.gk-ev-incident{box-shadow:inset 3px 0 0 var(--alarm); background:#FDF6F7;}
+.stApp .gk-events tbody tr.gk-ev-flagged{box-shadow:inset 3px 0 0 var(--amber); background:#FEFAF0;}
+.stApp .gk-events td.gk-path{font-family:var(--mono); font-size:12px;}
+.gk-clip{display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.stApp .gk-pill.gk-routed-real{background:#DCEEE9; color:var(--real); border-color:transparent;}
+.stApp .gk-pill.gk-routed-decoy{background:var(--lavender); color:var(--plum-700); border-color:transparent;}
+.stApp .gk-pill.gk-routed-blocked{background:#F6DADF; color:var(--alarm); border-color:transparent;}
+
+/* ---- all traffic: activity strip (events per minute, stacked by where the request went) ---- */
+.gk-activity{background:var(--white); border:1px solid var(--rule); border-radius:8px; padding:14px 18px 12px;}
+.stApp .gk-activity h2{font-size:15px; margin-bottom:10px;}
+.gk-bars{display:flex; align-items:stretch; gap:3px; height:84px;}
+.stApp .gk-bars li{flex:1 1 0; min-width:0; display:flex; align-items:flex-end; border-bottom:2px solid var(--rule);}
+.gk-stack{display:flex; flex-direction:column-reverse; width:100%; border-radius:2px 2px 0 0; overflow:hidden; min-height:3px;}
+.gk-seg{display:block; min-height:2px;}
+.gk-seg-real{background:var(--real);} .gk-seg-decoy{background:var(--plum-700);} .gk-seg-blocked{background:var(--alarm);}
+.stApp .gk-axis{display:flex; justify-content:space-between; font-size:12px; color:var(--plum-600); padding-top:4px;}
+.gk-legend-row{display:flex; flex-wrap:wrap; gap:4px 20px; padding-top:8px !important;}
+.stApp .gk-legend-row li{font-size:13px; color:var(--plum-600); display:flex; align-items:center; gap:6px;}
+.stApp .gk-legend-row li b{font-weight:500; color:var(--plum-950); font-variant-numeric:tabular-nums;}
+.gk-legend-row .gk-seg{width:10px; height:10px; border-radius:2px;}
+
+/* ---- all traffic: filter row (widget labels look like table headers) ---- */
+.stApp .gk-filters-head{margin-bottom:6px;}
+.stApp .gk-filters-head h2{font-size:15px; margin-bottom:0;}
+.stApp .st-key-filters{margin-bottom:12px;}
+.stApp .st-key-filters [data-testid="stHorizontalBlock"]{gap:12px;}
+.stApp .st-key-filters [data-testid="stColumn"]{min-width:0;}
+.stApp .st-key-filters label p{font-size:13px; font-weight:500; color:var(--plum-600);}
+.stApp .st-key-filters [data-testid="stWidgetLabel"]{min-height:0; margin-bottom:2px;}
+.stApp .st-key-filters [data-baseweb="select"]>div,.stApp .st-key-filters [data-baseweb="input"],.stApp .st-key-filters [data-baseweb="base-input"]{background:var(--white); border-color:var(--rule); border-radius:6px; min-height:34px;}
+.stApp .st-key-filters [data-baseweb="select"] *,.stApp .st-key-filters input{font-size:13px; font-family:var(--font); color:var(--plum-950);}
+.stApp .st-key-filters input{-webkit-text-fill-color:var(--plum-950);}
+.stApp .st-key-filters [data-baseweb="tag"]{background:var(--lavender); border-radius:4px; margin:1px 3px 1px 0;}
+.stApp .st-key-filters [data-baseweb="tag"] span{color:var(--plum-700);}
 .stApp .gk-triage{margin-bottom:12px;}
 .stApp .gk-triage h2{font-size:15px; margin-bottom:8px;}
 .gk-funnel{display:flex; flex-wrap:wrap; gap:6px 0;}
@@ -282,7 +345,7 @@ BASE_CSS = """
 .stApp .gk-pill-flagged{background:#F6EBCF; color:var(--amber); border-color:transparent;}
 .stApp .gk-pill-normal{background:#DCEEE9; color:var(--real); border-color:transparent;}
 
-@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;} .st-key-triage{padding:12px 20px 0;} .stApp .gk-funnel li{white-space:normal; border-left-width:1px; border-radius:8px; padding-left:12px; margin-right:6px;} .gk-funnel li+li::before{display:none;}}
+@media (max-width:900px){.gk-three{grid-template-columns:1fr;} .gk-band{padding:20px;} .st-key-main{padding:20px;} .st-key-traffic{padding:20px 20px 0;} .st-key-view{padding:0 20px !important;} .stApp .gk-funnel li{white-space:normal; border-left-width:1px; border-radius:8px; padding-left:12px; margin-right:6px;} .gk-funnel li+li::before{display:none;}}
 """
 
 

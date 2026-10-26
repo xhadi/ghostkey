@@ -151,6 +151,69 @@ def list_sessions(conn: sqlite3.Connection) -> list[dict]:
     return sorted(ordered, key=group)
 
 
+MAX_ALL_EVENTS = 1000
+
+# Values of the "Linked" filter on the All traffic tab.
+LINKED_ALL = "All"
+LINKED_IN_INCIDENT = "In an incident"
+LINKED_NOT_IN_INCIDENT = "Not in an incident"
+LINKED_FLAGGED = "Flagged (points > 0)"
+LINKED_OPTIONS = (LINKED_ALL, LINKED_IN_INCIDENT, LINKED_NOT_IN_INCIDENT, LINKED_FLAGGED)
+
+# Event columns the free-text search looks at.
+SEARCH_FIELDS = (
+    "source_ip", "bait_id", "credential_id", "target", "path", "user_agent", "incident_id", "event_id",
+)
+
+
+def list_all_events(conn: sqlite3.Connection, limit: int = MAX_ALL_EVENTS) -> list[dict]:
+    """The newest `limit` events (newest first): every events column plus `points`.
+
+    points = sum of signals.points for that event, 0 when the event has no signal.
+    """
+    rows = conn.execute(
+        "SELECT e.*, COALESCE((SELECT SUM(s.points) FROM signals s WHERE s.event_id = e.event_id), 0) AS points "
+        "FROM events e ORDER BY e.ts DESC, e.rowid DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _matches_linked(event: dict, linked: str) -> bool:
+    if linked == LINKED_IN_INCIDENT:
+        return bool(event["incident_id"])
+    if linked == LINKED_NOT_IN_INCIDENT:
+        return not event["incident_id"]
+    if linked == LINKED_FLAGGED:
+        return event["points"] > 0
+    return True
+
+
+def _matches_search(event: dict, needle: str) -> bool:
+    return any(needle in str(event.get(field) or "").lower() for field in SEARCH_FIELDS)
+
+
+def filter_events(events: list[dict], filters: dict) -> list[dict]:
+    """Keep the events that pass every filter. Order is kept.
+
+    filters keys (all optional): routed_to, token_kind, service, stage (lists of allowed values,
+    empty list = no filter), linked (one of LINKED_OPTIONS), search (case-insensitive text).
+    """
+    needle = (filters.get("search") or "").strip().lower()
+    linked = filters.get("linked") or LINKED_ALL
+    kept = []
+    for event in events:
+        if any(filters.get(key) and event[key] not in filters[key]
+               for key in ("routed_to", "token_kind", "service", "stage")):
+            continue
+        if not _matches_linked(event, linked):
+            continue
+        if needle and not _matches_search(event, needle):
+            continue
+        kept.append(event)
+    return kept
+
+
 # decision -> (new status, new mode, extra WHERE condition). The condition is the guard that keeps
 # each decision on the kind of action it fits; all of them also need tier = 'approval' AND status = 'pending'.
 DECISION_RULES = {

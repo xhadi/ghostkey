@@ -466,6 +466,11 @@ class ResponseAndHeaderTests(DashboardTestCase):
             views.analyst_html(analysis, len(events)),
             views.event_log_html(events),
             views.empty_state_html(),
+            views.funnel_html(queries.triage_funnel(self.conn)),
+            views.no_traffic_html(),
+            views.sessions_html(queries.list_sessions(self.conn)),
+            views.activity_html(queries.list_all_events(self.conn)),
+            views.all_events_html(queries.list_all_events(self.conn), len(self.events)),
         ]
         for piece in pieces:
             self.assertNotIn("\n\n", piece)
@@ -573,36 +578,43 @@ class TriageTests(DashboardTestCase):
         session = {"incident_id": None, "points": 0, "token_kind": "unknown"}
         self.assertEqual(views.session_verdict(session), ("unscored", "No signals"))
 
-    def test_triage_html_shows_funnel_sentence_and_sessions(self) -> None:
+    def test_funnel_html_shows_the_steps_and_the_note(self) -> None:
         funnel = queries.triage_funnel(self.conn)
-        panel = views.triage_html(funnel, queries.list_sessions(self.conn))
+        panel = views.funnel_html(funnel)
         self.assertIn("Traffic triage", panel)
         for label in ("requests checked", "passed silently", "flagged, watched", "incidents", "analyzed"):
             self.assertIn(label, panel)
         self.assertIn(f"{funnel['in_incidents']} requests", panel)
         self.assertIn(f"{funnel['analyzed_llm']} by LLM", panel)
         self.assertIn("Every request gets a cheap baseline check. Only incidents go to the analyst.", panel)
-        self.assertIn("gk-pill-incident", panel)
-        self.assertIn("gk-pill-normal", panel)
-        self.assertNotIn("more sessions", panel)
+        self.assertNotIn("<table", panel)
         self.assertNotIn("\n\n", panel)
 
-    def test_triage_html_caps_the_table_and_counts_the_rest(self) -> None:
+    def test_sessions_html_lists_every_session_with_last_seen(self) -> None:
+        sessions = queries.list_sessions(self.conn)
+        panel = views.sessions_html(sessions)
+        self.assertIn("gk-pill-incident", panel)
+        self.assertIn("gk-pill-normal", panel)
+        self.assertIn("Last seen", panel)
+        self.assertEqual(panel.count("<tr><td>"), len(sessions))
+        self.assertIn(views.fmt_time(sessions[0]["last_ts"]), panel)
+        self.assertNotIn("\n\n", panel)
+
+    def test_sessions_html_has_no_row_cap(self) -> None:
         sessions = [
             {"session_id": f"s_{n}", "source_ip": f"10.0.0.{n}", "token": "anonymous", "token_kind": "none",
              "requests": 1, "points": 0, "incident_id": None, "last_ts": "2026-10-25T10:00:00Z"}
-            for n in range(9)
+            for n in range(25)
         ]
-        funnel = queries.triage_funnel(self.conn)
-        panel = views.triage_html(funnel, sessions)
-        self.assertEqual(panel.count("<tr><td>"), views.MAX_TRIAGE_SESSIONS)
-        self.assertIn("+3 more sessions", panel)
+        panel = views.sessions_html(sessions)
+        self.assertEqual(panel.count("<tr><td>"), 25)
+        self.assertNotIn("more sessions", panel)
 
-    def test_triage_html_escapes_hostile_values(self) -> None:
+    def test_sessions_html_escapes_hostile_values(self) -> None:
         payload = "<script>alert(1)</script>"
         session = {"session_id": "s_x", "source_ip": payload, "token": payload, "token_kind": "real",
                    "requests": 1, "points": 0, "incident_id": payload, "last_ts": "2026-10-25T10:00:00Z"}
-        panel = views.triage_html(queries.triage_funnel(self.conn), [session])
+        panel = views.sessions_html([session])
         self.assertNotIn("<script>", panel)
         self.assertIn("&lt;script&gt;", panel)
         self.assertNotIn("\n\n", panel)
@@ -615,12 +627,219 @@ class TriageTests(DashboardTestCase):
                 funnel = queries.triage_funnel(conn)
                 self.assertEqual(funnel, {k: 0 for k in funnel})
                 self.assertEqual(queries.list_sessions(conn), [])
-                panel = views.triage_html(funnel, [])
+                self.assertEqual(queries.list_all_events(conn), [])
+                panel = views.no_traffic_html()
             finally:
                 conn.close()
         self.assertIn("No traffic yet", panel)
         self.assertNotIn("requests checked", panel)
         self.assertNotIn("\n\n", panel)
+
+
+class AllEventsQueryTests(DashboardTestCase):
+    def test_newest_first_with_points(self) -> None:
+        events = queries.list_all_events(self.conn)
+        self.assertEqual(len(events), len(self.events))
+        stamps = [e["ts"] for e in events]
+        self.assertEqual(stamps, sorted(stamps, reverse=True))
+        for column in ("event_id", "session_id", "source_ip", "user_agent", "routed_to", "incident_id", "path"):
+            self.assertIn(column, events[0])
+        expected = {
+            row["event_id"]: row["points"]
+            for row in self.conn.execute("SELECT event_id, SUM(points) AS points FROM signals GROUP BY event_id")
+        }
+        self.assertTrue(expected)
+        for event in events:
+            self.assertEqual(event["points"], expected.get(event["event_id"], 0))
+        self.assertEqual(sum(e["points"] for e in events), sum(expected.values()))
+
+    def test_limit_keeps_the_newest(self) -> None:
+        everything = queries.list_all_events(self.conn)
+        newest = queries.list_all_events(self.conn, limit=3)
+        self.assertEqual([e["event_id"] for e in newest], [e["event_id"] for e in everything[:3]])
+
+
+class EventFactoryTestCase(unittest.TestCase):
+    """Three hand-made events (plain real, bait in an incident, flagged without incident)."""
+
+    @staticmethod
+    def make(n: int, **overrides: object) -> dict:
+        event = {
+            "event_id": f"evt_{n:08d}", "ts": f"2026-10-25T10:00:{n:02d}Z", "session_id": "s_x",
+            "source_ip": "172.30.0.10", "user_agent": "npm/10", "token_kind": "real", "bait_id": None,
+            "credential_id": "REAL-CI-01", "stage": "build", "service": "npm", "method": "GET",
+            "path": "/@kfu/build-utils", "action": "install", "target": "@kfu/build-utils",
+            "status_code": 200, "result": "ok", "routed_to": "real", "incident_id": None, "processed": 1,
+            "points": 0,
+        }
+        event.update(overrides)
+        return event
+
+    def setUp(self) -> None:
+        self.real = self.make(1)
+        self.bait = self.make(2, token_kind="bait", bait_id="BAIT-SRC-01", credential_id=None, stage="source",
+                              service="git", routed_to="decoy", incident_id="INC-001", points=60,
+                              source_ip="172.30.0.66", user_agent="git/2.43", path="/ops/ci-pipeline.git",
+                              target="ops/ci-pipeline")
+        self.flagged = self.make(3, source_ip="172.30.0.77", points=20, routed_to="blocked", stage="publish")
+        self.events = [self.real, self.bait, self.flagged]
+
+
+class FilterEventsTests(EventFactoryTestCase):
+    def ids(self, filters: dict) -> list[str]:
+        return [e["event_id"] for e in queries.filter_events(self.events, filters)]
+
+    def test_no_filters_keeps_everything_in_order(self) -> None:
+        self.assertEqual(self.ids({}), [e["event_id"] for e in self.events])
+        empty = {"routed_to": [], "token_kind": [], "service": [], "stage": [], "linked": "All", "search": ""}
+        self.assertEqual(self.ids(empty), [e["event_id"] for e in self.events])
+
+    def test_multiselect_filters(self) -> None:
+        self.assertEqual(self.ids({"routed_to": ["decoy"]}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"routed_to": ["real", "blocked"]}), [self.real["event_id"], self.flagged["event_id"]])
+        self.assertEqual(self.ids({"token_kind": ["bait"]}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"service": ["git"]}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"stage": ["publish"]}), [self.flagged["event_id"]])
+        self.assertEqual(self.ids({"service": ["npm"], "stage": ["build"]}), [self.real["event_id"]])
+
+    def test_linked_filter(self) -> None:
+        self.assertEqual(self.ids({"linked": queries.LINKED_IN_INCIDENT}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"linked": queries.LINKED_NOT_IN_INCIDENT}),
+                         [self.real["event_id"], self.flagged["event_id"]])
+        self.assertEqual(self.ids({"linked": queries.LINKED_FLAGGED}), [self.bait["event_id"], self.flagged["event_id"]])
+
+    def test_search_is_case_insensitive_over_the_listed_fields(self) -> None:
+        self.assertEqual(self.ids({"search": "172.30.0.77"}), [self.flagged["event_id"]])
+        self.assertEqual(self.ids({"search": "bait-src"}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"search": "real-ci-01"}), [self.real["event_id"], self.flagged["event_id"]])
+        self.assertEqual(self.ids({"search": "OPS/CI"}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"search": "ci-pipeline.git"}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"search": "GIT/2.43"}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"search": "inc-001"}), [self.bait["event_id"]])
+        self.assertEqual(self.ids({"search": self.flagged["event_id"].upper()}), [self.flagged["event_id"]])
+        self.assertEqual(self.ids({"search": "  "}), [e["event_id"] for e in self.events])
+
+    def test_no_match_gives_an_empty_list(self) -> None:
+        self.assertEqual(self.ids({"search": "nothing-like-this"}), [])
+        self.assertEqual(self.ids({"routed_to": ["decoy"], "stage": ["publish"]}), [])
+
+    def test_filters_combine_with_and(self) -> None:
+        self.assertEqual(self.ids({"routed_to": ["real", "decoy"], "search": "172.30.0.66"}), [self.bait["event_id"]])
+
+
+class AllEventsHtmlTests(EventFactoryTestCase):
+    PAYLOAD = "<script>alert(1)</script>"
+
+    def test_header_line_counts_matches_and_total(self) -> None:
+        panel = views.all_events_html(self.events, total=3)
+        self.assertIn("Showing 3 of 3 events", panel)
+        self.assertEqual(panel.count("<tr"), 1 + 3)
+        panel = views.all_events_html(self.events[:2], total=3)
+        self.assertIn("Showing 2 of 2 events", panel)
+
+    def test_header_line_mentions_the_fetch_limit_and_the_draw_limit(self) -> None:
+        panel = views.all_events_html(self.events, total=5000, fetched=3)
+        self.assertIn("Only the newest 3 of 5000 events are loaded", panel)
+        panel = views.all_events_html(self.events, total=3, shown_limit=2)
+        self.assertIn("Showing 2 of 3 events", panel)
+        self.assertEqual(panel.count("<tr"), 1 + 2)
+
+    def test_nothing_matches_shows_a_quiet_line(self) -> None:
+        panel = views.all_events_html([], total=3)
+        self.assertIn("No events match these filters", panel)
+        self.assertIn("Showing 0 of 0 events", panel)
+        self.assertNotIn("<table", panel)
+
+    def test_row_classes_for_incident_and_flagged(self) -> None:
+        panel = views.all_events_html(self.events, total=3)
+        self.assertEqual(panel.count('class="gk-ev-incident"'), 1)
+        self.assertEqual(panel.count('class="gk-ev-flagged"'), 1)
+        # A plain row carries no row class.
+        self.assertIn("<tr><td>10:00:01</td>", panel)
+        # An event in an incident wins over flagged even when it has points.
+        self.assertIn('<tr class="gk-ev-incident"><td>10:00:02</td>', panel)
+
+    def test_cells_show_token_result_routed_points_and_incident(self) -> None:
+        panel = views.all_events_html(self.events, total=3)
+        self.assertIn("BAIT-SRC-01", panel)
+        self.assertIn("ok 200", panel)
+        self.assertIn("gk-routed-decoy", panel)
+        self.assertIn("gk-routed-blocked", panel)
+        self.assertIn("<td>60</td>", panel)
+        self.assertIn("<td>INC-001</td>", panel)
+        self.assertIn('title="/ops/ci-pipeline.git"', panel)
+
+    def test_hostile_values_are_escaped_in_text_and_title(self) -> None:
+        evil = self.make(9, path=f'/x"{self.PAYLOAD}', user_agent=self.PAYLOAD, target=self.PAYLOAD,
+                         source_ip=self.PAYLOAD, incident_id=self.PAYLOAD, credential_id=self.PAYLOAD)
+        panel = views.all_events_html([evil], total=1)
+        self.assertNotIn("<script>", panel)
+        self.assertIn("&lt;script&gt;", panel)
+        self.assertIn(f'title="{views.esc(self.PAYLOAD)}"', panel)
+        # The quote in the path must not close the title attribute.
+        self.assertIn("/x&quot;&lt;script&gt;", panel)
+        self.assertNotIn('title="/x"', panel)
+
+    def test_no_blank_lines(self) -> None:
+        for panel in (
+            views.all_events_html(self.events, total=3),
+            views.all_events_html([], total=0),
+        ):
+            self.assertNotIn("\n\n", panel)
+
+
+class ActivityHtmlTests(EventFactoryTestCase):
+    NOW = datetime(2026, 10, 25, 10, 30, 20, tzinfo=timezone.utc)
+
+    def at(self, minutes_ago: int, routed_to: str = "real", seconds: int = 0) -> dict:
+        stamp = self.NOW.replace(second=0) - timedelta(minutes=minutes_ago) + timedelta(seconds=seconds)
+        return self.make(1, ts=stamp.strftime("%Y-%m-%dT%H:%M:%SZ"), routed_to=routed_to)
+
+    def test_buckets_count_events_per_minute_and_plane(self) -> None:
+        events = [
+            self.at(0, "real"), self.at(0, "real", seconds=15), self.at(0, "decoy"),
+            self.at(5, "blocked"), self.at(29, "real"),
+        ]
+        buckets = views._activity_buckets(events, self.NOW, 30)
+        self.assertEqual(len(buckets), 30)
+        self.assertEqual(buckets[-1], {"real": 2, "decoy": 1, "blocked": 0})
+        self.assertEqual(buckets[-1 - 5], {"real": 0, "decoy": 0, "blocked": 1})
+        self.assertEqual(buckets[0], {"real": 1, "decoy": 0, "blocked": 0})
+        self.assertEqual(sum(sum(b.values()) for b in buckets), 5)
+
+    def test_events_outside_the_window_are_left_out(self) -> None:
+        old = self.at(30, "real")
+        future = self.at(-2, "real")
+        buckets = views._activity_buckets([old, future], self.NOW, 30)
+        self.assertEqual(sum(sum(b.values()) for b in buckets), 0)
+
+    def test_html_has_one_slot_per_minute_and_totals_in_the_legend(self) -> None:
+        events = [self.at(0, "real"), self.at(0, "decoy"), self.at(1, "decoy"), self.at(40, "decoy")]
+        panel = views.activity_html(events, now=self.NOW)
+        self.assertEqual(panel.count("<li title="), 30)
+        self.assertIn("Real <b>1</b>", panel)
+        self.assertIn("Decoy <b>2</b>", panel)
+        self.assertIn("Blocked <b>0</b>", panel)
+        self.assertIn("10:30 UTC: 2 events (1 real, 1 decoy)", panel)
+        self.assertIn("10:01 UTC", panel)
+        self.assertEqual(panel.count('class="gk-stack"'), 2)
+        # The tallest minute fills the bar; the quieter one is shorter.
+        self.assertIn("height:100%", panel)
+        self.assertIn("height:50%", panel)
+
+    def test_empty_minutes_have_no_stack(self) -> None:
+        panel = views.activity_html([], now=self.NOW)
+        self.assertEqual(panel.count("<li title="), 30)
+        self.assertNotIn("gk-stack", panel)
+        self.assertIn("Real <b>0</b>", panel)
+
+    def test_minutes_parameter_changes_the_window(self) -> None:
+        panel = views.activity_html([self.at(10)], now=self.NOW, minutes=10)
+        self.assertEqual(panel.count("<li title="), 10)
+        self.assertIn("Real <b>0</b>", panel)
+
+    def test_no_blank_lines(self) -> None:
+        self.assertNotIn("\n\n", views.activity_html([self.at(0)], now=self.NOW))
 
 
 class EvidencePanelTests(DashboardTestCase):
