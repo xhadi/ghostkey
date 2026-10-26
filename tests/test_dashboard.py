@@ -892,14 +892,14 @@ class EvidencePanelTests(DashboardTestCase):
             views.elsewhere_html(incident, sessions),
         )
 
-    def test_scenario2_reached_real_lists_the_publish_as_written(self) -> None:
+    def test_scenario2_reached_real_shows_reads_but_not_the_refused_publish(self) -> None:
+        # The real registry refuses the ci-bot publish (result=denied), so nothing was written there.
         reached, _, _ = self.panels("INC-002")
-        self.assertIn("Written to the real npm", reached)
-        self.assertIn("@kfu/build-utils", reached)
+        self.assertNotIn("Written to", reached)
+        self.assertNotIn("Ghostkey does not delete anything", reached)
         self.assertIn("Read from the real npm", reached)
+        self.assertIn("@kfu/build-utils", reached)
         self.assertIn("@kfu/payments-sdk", reached)
-        self.assertIn("Ghostkey does not delete anything", reached)
-        self.assertLess(reached.index("Written to"), reached.index("Read from"))
 
     def test_scenario1_reached_nothing_real(self) -> None:
         reached, _, _ = self.panels("INC-001")

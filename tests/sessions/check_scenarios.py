@@ -133,6 +133,10 @@ def check_scenario2(conn) -> None:
           f"{sorted({e['routed_to'] for e in events})}")
     if len(found) != 1:
         return
+    publishes = [e for e in events if e["action"] == "publish"]
+    check(len(publishes) == 1 and publishes[0]["result"] == "denied",
+          "the publish was refused by the real registry (result=denied)",
+          f"{[(e['status_code'], e['result']) for e in publishes]}")
     inc = found[0]
     check(inc["signal_kind"] == "behavior", "signal_kind=behavior", inc["signal_kind"])
     check(inc["confidence"] == "medium", "confidence=medium", inc["confidence"])
